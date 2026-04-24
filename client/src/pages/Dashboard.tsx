@@ -46,8 +46,8 @@ const Dashboard = () => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        // Using absolute URL for local dev proxy fallback
-        const API_URL = 'http://localhost:5000/api';
+        // Using production Render URL
+        const API_URL = 'https://jassm-admin-app.onrender.com/api';
         
         const [summaryRes, reportsRes] = await Promise.all([
           fetch(`${API_URL}/payments/summary`),

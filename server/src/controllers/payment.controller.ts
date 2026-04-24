@@ -257,6 +257,30 @@ export const getPayments = async (req: Request, res: Response) => {
   }
 };
 
+export const getCallbackEvents = async (req: Request, res: Response) => {
+  const { limit = 20 } = req.query;
+
+  try {
+    const events = await prisma.paymentCallbackEvent.findMany({
+      take: Math.min(Number(limit) || 20, 100),
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        eventType: true,
+        transactionCode: true,
+        status: true,
+        error: true,
+        createdAt: true,
+        processedAt: true,
+      },
+    });
+
+    res.json({ events });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching callback events' });
+  }
+};
+
 export const triggerStkPush = async (req: Request, res: Response) => {
   const { phoneNumber, amount, accountReference } = req.body;
 

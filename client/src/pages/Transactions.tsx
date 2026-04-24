@@ -3,17 +3,18 @@ import {
   Search, 
   Filter, 
   Download, 
-  MoreHorizontal,
   CheckCircle2,
   XCircle,
   Clock,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Radio
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 const Transactions = () => {
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [callbackEvents, setCallbackEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
@@ -42,6 +43,22 @@ const Transactions = () => {
     const debounce = setTimeout(fetchTransactions, 300);
     return () => clearTimeout(debounce);
   }, [page, searchTerm]);
+
+  useEffect(() => {
+    const fetchCallbackEvents = async () => {
+      try {
+        const res = await apiFetch('/payments/callback-events?limit=5');
+        if (res.ok) {
+          const data = await res.json();
+          setCallbackEvents(data.events || []);
+        }
+      } catch (e) {
+        console.error('Error fetching callback events:', e);
+      }
+    };
+
+    fetchCallbackEvents();
+  }, []);
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -74,6 +91,40 @@ const Transactions = () => {
             <span>Export</span>
           </button>
         </div>
+      </div>
+
+      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h2 className="font-bold text-slate-900 flex items-center">
+              <Radio size={18} className="mr-2 text-blue-500" />
+              Recent M-Pesa Callbacks
+            </h2>
+            <p className="text-sm text-slate-500">Use this to confirm whether Safaricom is reaching the app.</p>
+          </div>
+        </div>
+        {callbackEvents.length === 0 ? (
+          <div className="px-6 py-6 text-sm text-slate-400">
+            No callback events recorded yet. If a real Till payment was made after the latest deployment, Safaricom has not reached this server.
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {callbackEvents.map((event) => (
+              <div key={event.id} className="px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-800">{event.eventType}</p>
+                  <p className="text-sm text-slate-500">
+                    {event.transactionCode || 'No transaction code'} · {new Date(event.createdAt).toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </p>
+                  {event.error && <p className="text-xs text-rose-600 mt-1">{event.error}</p>}
+                </div>
+                <span className={`w-fit text-xs font-bold px-3 py-1 rounded-full ${event.status === 'PROCESSED' ? 'bg-emerald-100 text-emerald-700' : event.status === 'FAILED' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
+                  {event.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">

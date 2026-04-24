@@ -5,6 +5,7 @@ import {
   handleCallback, 
   getSummary, 
   getReports,
+  getCallbackEvents,
   handleC2BValidation,
   handleC2BConfirmation,
   registerC2B
@@ -16,6 +17,7 @@ const router = Router();
 router.get('/', authenticate, getPayments);
 router.get('/summary', authenticate, getSummary);
 router.get('/reports', authenticate, getReports);
+router.get('/callback-events', authenticate, getCallbackEvents);
 router.post('/stk-push', authenticate, triggerStkPush);
 router.post('/callback', handleCallback); // Public callback endpoint
 

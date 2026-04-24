@@ -7,10 +7,8 @@ import SMSManager from './pages/SMSManager';
 import Customers from './pages/Customers';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
+import Settings from './pages/Settings';
 import { apiFetch, clearAuth, getToken } from './lib/api';
-
-// Placeholder components
-const Settings = () => <div className="p-8"><h1 className="text-2xl font-bold">Settings</h1><p className="text-slate-500">System settings coming soon...</p></div>;
 
 const ProtectedLayout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();

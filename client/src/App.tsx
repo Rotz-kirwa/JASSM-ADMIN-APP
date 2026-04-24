@@ -12,7 +12,8 @@ import Login from './pages/Login';
 const Settings = () => <div className="p-8"><h1 className="text-2xl font-bold">Settings</h1><p className="text-slate-500">System settings coming soon...</p></div>;
 
 const ProtectedLayout = ({ children }: { children: React.ReactNode }) => {
-  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
+  const token = localStorage.getItem('token');
+  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true' && !!token;
 
   if (!isAuthenticated) {
     return <Navigate to="/login" />;

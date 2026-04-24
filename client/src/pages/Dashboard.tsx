@@ -15,6 +15,7 @@ import {
   Tooltip, 
   ResponsiveContainer 
 } from 'recharts';
+import { apiFetch } from '../lib/api';
 
 const StatCard = ({ title, amount, count, icon: Icon, color }: any) => (
   <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
@@ -30,7 +31,7 @@ const StatCard = ({ title, amount, count, icon: Icon, color }: any) => (
     <div className="mt-4">
       <h3 className="text-slate-500 text-sm font-medium">{title}</h3>
       <p className="text-2xl font-bold text-slate-900 mt-1">
-        KES {amount.toLocaleString()}
+        KES {Number(amount).toLocaleString()}
       </p>
     </div>
   </div>
@@ -41,17 +42,17 @@ const Dashboard = () => {
   const [chartData, setChartData] = useState<any[]>([]);
   const [chartRange, setChartRange] = useState('last7days');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        // Using production Render URL
-        const API_URL = 'https://jassm-admin-app.onrender.com/api';
-        
+        setError('');
+
         const [summaryRes, reportsRes] = await Promise.all([
-          fetch(`${API_URL}/payments/summary`),
-          fetch(`${API_URL}/payments/reports?range=${chartRange}`)
+          apiFetch('/payments/summary'),
+          apiFetch(`/payments/reports?range=${chartRange}`)
         ]);
 
         if (summaryRes.ok) {
@@ -62,8 +63,10 @@ const Dashboard = () => {
           const reportsData = await reportsRes.json();
           setChartData(reportsData);
         }
-      } catch (error) {
-        console.error("Error fetching dashboard data:", error);
+      } catch (error: any) {
+        if (error.message !== 'Unauthorized') {
+          setError('Failed to load dashboard data.');
+        }
       } finally {
         setLoading(false);
       }
@@ -78,6 +81,12 @@ const Dashboard = () => {
         <h1 className="text-2xl font-bold text-slate-900">Financial Overview</h1>
         <p className="text-slate-500">Real-time payment metrics from successful M-Pesa transactions.</p>
       </div>
+
+      {error && (
+        <div className="bg-rose-50 border border-rose-200 text-rose-700 px-4 py-3 rounded-xl text-sm">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatCard 
@@ -138,6 +147,8 @@ const Dashboard = () => {
         <div className="h-[350px] w-full">
           {loading ? (
             <div className="w-full h-full flex items-center justify-center text-slate-400">Loading chart data...</div>
+          ) : chartData.length === 0 ? (
+            <div className="w-full h-full flex items-center justify-center text-slate-400">No transactions found for this period.</div>
           ) : (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>

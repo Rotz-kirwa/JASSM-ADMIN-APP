@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   BarChart3, 
-  Download, 
-  Calendar, 
+  Download,
   ArrowUpRight,
-  Filter
+  TrendingUp
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -16,18 +15,39 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
-
-const data = [
-  { name: 'Jan', amount: 45000 },
-  { name: 'Feb', amount: 52000 },
-  { name: 'Mar', amount: 48000 },
-  { name: 'Apr', amount: 61000 },
-  { name: 'May', amount: 55000 },
-  { name: 'Jun', amount: 67000 },
-];
+import { apiFetch } from '../lib/api';
 
 const Reports = () => {
-  const [range, setRange] = useState('month');
+  const [range, setRange] = useState('last7days');
+  const [chartData, setChartData] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchReports = async () => {
+      setLoading(true);
+      try {
+        const [reportsRes, summaryRes] = await Promise.all([
+          apiFetch(`/payments/reports?range=${range}`),
+          apiFetch('/payments/summary'),
+        ]);
+        if (reportsRes.ok) setChartData(await reportsRes.json());
+        if (summaryRes.ok) setSummary(await summaryRes.json());
+      } catch (e) {
+        console.error('Error fetching reports:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchReports();
+  }, [range]);
+
+  const totalRevenue = summary?.thisYear?.amount || 0;
+  const totalCount = summary?.thisYear?.count || 0;
+  const avgTransaction = totalCount > 0 ? totalRevenue / totalCount : 0;
+
+  // Find peak bar for color highlighting
+  const maxRevenue = Math.max(...chartData.map(d => d.revenue), 0);
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -45,89 +65,110 @@ const Reports = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Chart */}
         <div className="lg:col-span-2 bg-white p-8 rounded-2xl shadow-sm border border-slate-100">
           <div className="flex justify-between items-center mb-8">
             <h3 className="font-bold text-slate-900 flex items-center">
               <BarChart3 size={20} className="mr-2 text-blue-500" />
               Revenue Growth
             </h3>
-            <div className="flex items-center space-x-2 bg-slate-50 p-1 rounded-lg">
-              {['week', 'month', 'year'].map((r) => (
+            <div className="flex items-center space-x-1 bg-slate-50 p-1 rounded-lg">
+              {[
+                { label: 'Today', value: 'today' },
+                { label: '7 Days', value: 'last7days' },
+                { label: 'Month', value: 'thismonth' },
+                { label: 'Year', value: 'thisyear' },
+              ].map((r) => (
                 <button 
-                  key={r}
-                  onClick={() => setRange(r)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${range === r ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+                  key={r.value}
+                  onClick={() => setRange(r.value)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-bold uppercase transition-all ${range === r.value ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
                 >
-                  {r}
+                  {r.label}
                 </button>
               ))}
             </div>
           </div>
-          <div className="h-[400px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="name" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#64748b', fontSize: 12 }}
-                  dy={10}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#64748b', fontSize: 12 }}
-                />
-                <Tooltip 
-                  cursor={{ fill: '#f8fafc' }}
-                  contentStyle={{ 
-                    backgroundColor: '#fff', 
-                    borderRadius: '12px', 
-                    border: 'none', 
-                    boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' 
-                  }}
-                />
-                <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
-                  {data.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={index === data.length - 1 ? '#3b82f6' : '#cbd5e1'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="h-[380px] w-full">
+            {loading ? (
+              <div className="w-full h-full flex items-center justify-center text-slate-400">Loading chart...</div>
+            ) : chartData.length === 0 || chartData.every(d => d.revenue === 0) ? (
+              <div className="w-full h-full flex flex-col items-center justify-center text-slate-400">
+                <TrendingUp size={48} className="mb-3 text-slate-200" />
+                <p>No payment data for this period.</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} barCategoryGap="30%">
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }} dy={10} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#64748b', fontSize: 12 }}
+                    tickFormatter={(v) => v >= 1000 ? `${v/1000}k` : v} />
+                  <Tooltip 
+                    cursor={{ fill: '#f8fafc' }}
+                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                    formatter={(value: number) => [`KES ${value.toLocaleString()}`, 'Revenue']}
+                  />
+                  <Bar dataKey="revenue" radius={[6, 6, 0, 0]}>
+                    {chartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.revenue === maxRevenue && maxRevenue > 0 ? '#3b82f6' : '#cbd5e1'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
+        {/* Side stats */}
         <div className="space-y-6">
           <div className="bg-gradient-to-br from-blue-600 to-blue-700 p-8 rounded-2xl text-white shadow-xl shadow-blue-500/20">
             <h3 className="text-blue-100 text-sm font-medium mb-1">Total Revenue (Year)</h3>
-            <p className="text-4xl font-bold mb-6">KES 1.2M</p>
+            <p className="text-4xl font-bold mb-6">KES {totalRevenue >= 1000 ? `${(totalRevenue/1000).toFixed(1)}K` : totalRevenue.toLocaleString()}</p>
             <div className="flex items-center text-blue-100 text-sm">
               <div className="p-1 bg-white/20 rounded-lg mr-2">
                 <ArrowUpRight size={16} />
               </div>
-              <span>24% increase from last year</span>
+              <span>{totalCount} successful transactions</span>
             </div>
           </div>
 
           <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
             <h3 className="font-bold text-slate-900 mb-4">Summary Metrics</h3>
             <div className="space-y-4">
-              {[
-                { label: 'Avg. Transaction', value: 'KES 2,450', color: 'bg-emerald-500' },
-                { label: 'Recurring Rate', value: '64%', color: 'bg-blue-500' },
-                { label: 'Refund Rate', value: '0.2%', color: 'bg-rose-500' },
-              ].map((metric) => (
-                <div key={metric.label}>
-                  <div className="flex justify-between text-sm mb-1.5">
-                    <span className="text-slate-500">{metric.label}</span>
-                    <span className="font-bold text-slate-900">{metric.value}</span>
-                  </div>
-                  <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
-                    <div className={`${metric.color} h-full`} style={{ width: metric.value.includes('%') ? metric.value : '75%' }}></div>
-                  </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-slate-500">This Week</span>
+                  <span className="font-bold text-slate-900">KES {(summary?.thisWeek?.amount || 0).toLocaleString()}</span>
                 </div>
-              ))}
+                <div className="w-full bg-slate-100 h-2 rounded-full">
+                  <div className="bg-emerald-500 h-full rounded-full" style={{ width: totalRevenue > 0 ? `${Math.min(100, ((summary?.thisWeek?.amount || 0) / totalRevenue) * 100)}%` : '0%' }}></div>
+                </div>
+              </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-slate-500">This Month</span>
+                  <span className="font-bold text-slate-900">KES {(summary?.thisMonth?.amount || 0).toLocaleString()}</span>
+                </div>
+                <div className="w-full bg-slate-100 h-2 rounded-full">
+                  <div className="bg-blue-500 h-full rounded-full" style={{ width: totalRevenue > 0 ? `${Math.min(100, ((summary?.thisMonth?.amount || 0) / totalRevenue) * 100)}%` : '0%' }}></div>
+                </div>
+              </div>
+              <div>
+                <div className="flex justify-between text-sm mb-1.5">
+                  <span className="text-slate-500">Avg. Transaction</span>
+                  <span className="font-bold text-slate-900">KES {avgTransaction > 0 ? avgTransaction.toFixed(0) : '0'}</span>
+                </div>
+                <div className="w-full bg-slate-100 h-2 rounded-full">
+                  <div className="bg-amber-500 h-full rounded-full" style={{ width: '65%' }}></div>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500">Today's Collections</span>
+                  <span className="font-bold text-slate-900">KES {(summary?.today?.amount || 0).toLocaleString()}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>

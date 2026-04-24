@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Search, 
   Filter, 
@@ -6,13 +6,42 @@ import {
   MoreHorizontal,
   CheckCircle2,
   XCircle,
-  Clock
+  Clock,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
-
-const mockTransactions: any[] = [];
+import { apiFetch } from '../lib/api';
 
 const Transactions = () => {
+  const [transactions, setTransactions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState({ total: 0, pages: 1 });
+  const limit = 10;
+
+  useEffect(() => {
+    const fetchTransactions = async () => {
+      try {
+        setLoading(true);
+        const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+        if (searchTerm) params.set('search', searchTerm);
+        const res = await apiFetch(`/payments?${params}`);
+        if (res.ok) {
+          const data = await res.json();
+          setTransactions(data.payments || []);
+          setPagination(data.pagination || { total: 0, pages: 1 });
+        }
+      } catch (e) {
+        console.error('Error fetching transactions:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    const debounce = setTimeout(fetchTransactions, 300);
+    return () => clearTimeout(debounce);
+  }, [page, searchTerm]);
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -25,9 +54,9 @@ const Transactions = () => {
 
   const getStatusIcon = (status: string) => {
     switch (status) {
-      case 'SUCCESS': return <CheckCircle2 size={16} />;
-      case 'FAILED': return <XCircle size={16} />;
-      case 'PENDING': return <Clock size={16} />;
+      case 'SUCCESS': return <CheckCircle2 size={14} />;
+      case 'FAILED': return <XCircle size={14} />;
+      case 'PENDING': return <Clock size={14} />;
       default: return null;
     }
   };
@@ -44,9 +73,6 @@ const Transactions = () => {
             <Download size={18} />
             <span>Export</span>
           </button>
-          <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20">
-            <span>New Payment</span>
-          </button>
         </div>
       </div>
 
@@ -59,7 +85,7 @@ const Transactions = () => {
               placeholder="Search by code, phone, or name..."
               className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:ring-2 ring-blue-500/20 transition-all"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
             />
           </div>
           <div className="flex items-center space-x-2">
@@ -72,55 +98,87 @@ const Transactions = () => {
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
-              <tr className="bg-slate-50 text-slate-500 text-sm uppercase tracking-wider font-semibold">
+              <tr className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider font-semibold">
                 <th className="px-6 py-4">Transaction Code</th>
                 <th className="px-6 py-4">Customer</th>
                 <th className="px-6 py-4">Amount</th>
+                <th className="px-6 py-4">Source</th>
                 <th className="px-6 py-4">Date & Time</th>
                 <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {mockTransactions.map((tx) => (
-                <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4">
-                    <span className="font-mono font-bold text-slate-700">{tx.code}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div>
-                      <p className="font-semibold text-slate-900">{tx.customer}</p>
-                      <p className="text-sm text-slate-500">{tx.phone}</p>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="font-bold text-slate-900">KES {tx.amount.toLocaleString()}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="text-slate-600 text-sm">{tx.date}</span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold ${getStatusStyle(tx.status)}`}>
-                      {getStatusIcon(tx.status)}
-                      <span>{tx.status}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <button className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors">
-                      <MoreHorizontal size={20} />
-                    </button>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                    Loading transactions...
                   </td>
                 </tr>
-              ))}
+              ) : transactions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                    No transactions found.
+                  </td>
+                </tr>
+              ) : (
+                transactions.map((tx) => (
+                  <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4">
+                      <span className="font-mono font-bold text-slate-700 text-sm">{tx.transactionCode}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div>
+                        <p className="font-semibold text-slate-900">{tx.customerName || 'Unknown'}</p>
+                        <p className="text-sm text-slate-500">{tx.phoneNumber}</p>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="font-bold text-slate-900">KES {Number(tx.amount).toLocaleString()}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-2 py-1 rounded-lg">
+                        {tx.source}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="text-slate-600 text-sm">
+                        {new Date(tx.paidAt).toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className={`inline-flex items-center space-x-1.5 px-3 py-1 rounded-full text-xs font-bold ${getStatusStyle(tx.status)}`}>
+                        {getStatusIcon(tx.status)}
+                        <span>{tx.status}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
-        
+
         <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-          <p className="text-sm text-slate-500">Showing 1 to 4 of 24 transactions</p>
+          <p className="text-sm text-slate-500">
+            {pagination.total > 0 
+              ? `Showing ${(page - 1) * limit + 1}–${Math.min(page * limit, pagination.total)} of ${pagination.total} transactions`
+              : 'No transactions'}
+          </p>
           <div className="flex space-x-2">
-            <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">Previous</button>
-            <button className="px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-50">Next</button>
+            <button 
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <button 
+              onClick={() => setPage(p => Math.min(pagination.pages, p + 1))}
+              disabled={page >= pagination.pages}
+              className="p-2 bg-white border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <ChevronRight size={16} />
+            </button>
           </div>
         </div>
       </div>

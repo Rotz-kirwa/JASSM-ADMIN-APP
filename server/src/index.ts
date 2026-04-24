@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcrypt';
 import authRoutes from './routes/auth.routes';
 import paymentRoutes from './routes/payment.routes';
 import smsRoutes from './routes/sms.routes';
@@ -13,6 +15,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const prisma = new PrismaClient();
 
 // Middleware
 app.use(cors());
@@ -37,6 +40,55 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   res.status(500).json({ message: 'Something went wrong!' });
 });
 
-app.listen(PORT, () => {
+// Auto-seed: create roles and admin user if they don't exist
+async function seedIfEmpty() {
+  try {
+    const roleCount = await prisma.role.count();
+    if (roleCount === 0) {
+      console.log('==> No roles found. Running initial seed...');
+      const roles = [
+        { name: 'SUPER_ADMIN', permissions: ['*'] },
+        { name: 'ADMIN', permissions: ['read', 'write'] },
+        { name: 'FINANCE', permissions: ['read:payments'] },
+        { name: 'SUPPORT', permissions: ['read:customers', 'read:sms'] },
+      ];
+      for (const role of roles) {
+        await prisma.role.upsert({ where: { name: role.name }, update: {}, create: role });
+      }
+
+      const superAdminRole = await prisma.role.findUnique({ where: { name: 'SUPER_ADMIN' } });
+      if (superAdminRole) {
+        const hashedPassword = await bcrypt.hash('admin123', 10);
+        await prisma.user.upsert({
+          where: { email: 'eliudkirwa451@gmail.com' },
+          update: {},
+          create: {
+            email: 'eliudkirwa451@gmail.com',
+            name: 'Super Admin',
+            password: hashedPassword,
+            roleId: superAdminRole.id,
+          },
+        });
+      }
+
+      await prisma.sMSTemplate.upsert({
+        where: { name: 'Payment Received' },
+        update: {},
+        create: {
+          name: 'Payment Received',
+          content: 'Hi {{name}}, we received your payment of KES {{amount}}. Code: {{transaction_code}}. Thank you - {{business_name}}',
+          isActive: true,
+        },
+      });
+
+      console.log('==> Seed completed. Admin: eliudkirwa451@gmail.com / admin123');
+    }
+  } catch (err) {
+    console.error('Auto-seed error:', err);
+  }
+}
+
+app.listen(PORT, async () => {
   console.log(`Server is running on port ${PORT}`);
+  await seedIfEmpty();
 });

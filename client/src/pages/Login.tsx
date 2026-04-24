@@ -1,17 +1,42 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, Mail, ArrowRight, ShieldCheck } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
+import API_BASE from '../lib/api';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simulate login
-    localStorage.setItem('isAuthenticated', 'true');
-    navigate('/');
+    setError('');
+    setLoading(true);
+
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.message || 'Invalid email or password');
+        return;
+      }
+
+      localStorage.setItem('token', data.token);
+      localStorage.setItem('isAuthenticated', 'true');
+      navigate('/');
+    } catch (err) {
+      setError('Server is unreachable. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -28,6 +53,13 @@ const Login = () => {
           <h1 className="text-3xl font-bold text-white tracking-tight">Admin Portal</h1>
           <p className="text-slate-400 mt-2">Sign in to manage your payments</p>
         </div>
+
+        {error && (
+          <div className="flex items-center space-x-2 bg-rose-500/10 border border-rose-500/30 text-rose-400 rounded-xl px-4 py-3 mb-6 text-sm">
+            <AlertCircle size={16} className="shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
 
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
@@ -70,10 +102,11 @@ const Login = () => {
 
           <button 
             type="submit"
-            className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold flex items-center justify-center space-x-2 hover:from-blue-500 hover:to-blue-400 transition-all transform active:scale-[0.98] shadow-lg shadow-blue-600/25"
+            disabled={loading}
+            className="w-full py-4 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold flex items-center justify-center space-x-2 hover:from-blue-500 hover:to-blue-400 transition-all transform active:scale-[0.98] shadow-lg shadow-blue-600/25 disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <span>Sign In</span>
-            <ArrowRight size={20} />
+            <span>{loading ? 'Signing in...' : 'Sign In'}</span>
+            {!loading && <ArrowRight size={20} />}
           </button>
         </form>
 

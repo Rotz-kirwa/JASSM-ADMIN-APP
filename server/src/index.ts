@@ -34,8 +34,46 @@ app.use('/api/sms', smsRoutes);
 app.use('/api/customers', customerRoutes);
 app.use('/api/settings', settingRoutes);
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'UP', timestamp: new Date() });
+const requiredTables = [
+  'Role',
+  'User',
+  'Customer',
+  'Payment',
+  'PaymentCallbackEvent',
+  'SMSTemplate',
+  'SMSLog',
+  'AuditLog',
+  'Setting',
+];
+
+app.get('/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    const tableChecks = await Promise.all(
+      requiredTables.map(async (table) => {
+        const result = await prisma.$queryRaw<Array<{ exists: boolean }>>`
+          SELECT to_regclass(${`public."${table}"`}) IS NOT NULL AS "exists"
+        `;
+
+        return { table, exists: Boolean(result[0]?.exists) };
+      })
+    );
+    const missingTables = tableChecks.filter((table) => !table.exists).map((table) => table.table);
+
+    res.status(missingTables.length > 0 ? 503 : 200).json({
+      status: missingTables.length > 0 ? 'DEGRADED' : 'UP',
+      database: 'UP',
+      missingTables,
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    res.status(503).json({
+      status: 'DOWN',
+      database: 'DOWN',
+      message: error instanceof Error ? error.message : 'Database health check failed',
+      timestamp: new Date(),
+    });
+  }
 });
 
 // Error handling middleware

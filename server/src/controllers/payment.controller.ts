@@ -67,6 +67,153 @@ const sendPaymentSms = async (
   }
 };
 
+const createCallbackEvent = async (
+  eventType: string,
+  payload: unknown,
+  transactionCode?: string
+) => {
+  try {
+    return await prisma.paymentCallbackEvent.create({
+      data: {
+        eventType,
+        transactionCode,
+        payload: (payload ?? {}) as Prisma.InputJsonValue,
+      },
+    });
+  } catch (error) {
+    console.error(`Failed to record ${eventType} callback event:`, error);
+    return null;
+  }
+};
+
+const updateCallbackEvent = async (
+  id: string | undefined,
+  status: 'PROCESSED' | 'FAILED',
+  transactionCode?: string,
+  error?: unknown
+) => {
+  if (!id) return;
+
+  try {
+    await prisma.paymentCallbackEvent.update({
+      where: { id },
+      data: {
+        status,
+        transactionCode,
+        error: error ? String(error instanceof Error ? error.message : error).slice(0, 2000) : undefined,
+        processedAt: new Date(),
+      },
+    });
+  } catch (eventError) {
+    console.error('Failed to update payment callback event:', eventError);
+  }
+};
+
+const recordSuccessfulPayment = async ({
+  transactionCode,
+  phoneNumber,
+  amount,
+  paidAt,
+  source,
+  customerName,
+  rawCallback,
+}: {
+  transactionCode: string;
+  phoneNumber: string;
+  amount: number;
+  paidAt: Date;
+  source: string;
+  customerName?: string;
+  rawCallback: Prisma.InputJsonValue;
+}) => {
+  const existingPayment = await prisma.payment.findUnique({
+    where: { transactionCode },
+  });
+
+  if (existingPayment) return existingPayment;
+
+  const payment = await prisma.$transaction(async (tx) => {
+    const customer = await tx.customer.upsert({
+      where: { phoneNumber },
+      update: {
+        totalPaid: { increment: amount },
+        lastPaidAt: paidAt,
+        name: customerName || undefined,
+      },
+      create: {
+        phoneNumber,
+        name: customerName,
+        totalPaid: amount,
+        lastPaidAt: paidAt,
+      },
+    });
+
+    return tx.payment.create({
+      data: {
+        transactionCode,
+        phoneNumber,
+        customerName,
+        amount,
+        status: 'SUCCESS',
+        source,
+        paidAt,
+        customerId: customer.id,
+        rawCallback,
+      },
+    });
+  });
+
+  void sendPaymentSms(phoneNumber, amount, transactionCode, paidAt);
+
+  return payment;
+};
+
+const processC2BPayload = async (payload: any, eventId?: string) => {
+  const {
+    TransID,
+    TransAmount,
+    MSISDN,
+    PhoneNumber,
+    FirstName,
+    MiddleName,
+    LastName,
+    TransTime,
+    BillRefNumber,
+    BusinessShortCode,
+    InvoiceNumber,
+    ThirdPartyTransID,
+  } = payload;
+
+  const transactionCode = String(TransID || ThirdPartyTransID || '').trim();
+  const amount = Number(TransAmount);
+  const phoneNumber = normalizePhoneNumber(MSISDN || PhoneNumber);
+
+  if (!transactionCode || !Number.isFinite(amount) || amount <= 0 || !phoneNumber) {
+    throw new Error('C2B confirmation missing transaction code, amount, or phone number');
+  }
+
+  const paidAt = parseMpesaDate(TransTime);
+  const customerName = [FirstName, MiddleName, LastName].filter(Boolean).join(' ');
+
+  const payment = await recordSuccessfulPayment({
+    transactionCode,
+    phoneNumber,
+    customerName,
+    amount,
+    source: 'C2B_TILL',
+    paidAt,
+    rawCallback: {
+      ...payload,
+      BillRefNumber,
+      BusinessShortCode,
+      InvoiceNumber,
+    } as Prisma.InputJsonValue,
+  });
+
+  await updateCallbackEvent(eventId, 'PROCESSED', transactionCode);
+  return payment;
+};
+
 export const getPayments = async (req: Request, res: Response) => {
   const { page = 1, limit = 10, search, startDate, endDate } = req.query;
   const skip = (Number(page) - 1) * Number(limit);
@@ -127,11 +274,31 @@ export const triggerStkPush = async (req: Request, res: Response) => {
 };
 
 export const handleCallback = async (req: Request, res: Response) => {
+  if (!req.body?.Body?.stkCallback && (req.body?.TransID || req.body?.ThirdPartyTransID)) {
+    const event = await createCallbackEvent('C2B_GENERIC_CALLBACK', req.body, req.body.TransID || req.body.ThirdPartyTransID);
+
+    try {
+      await processC2BPayload(req.body, event?.id);
+      return res.json(MPESA_ACCEPTED);
+    } catch (error) {
+      if (isDuplicateTransactionError(error)) {
+        await updateCallbackEvent(event?.id, 'PROCESSED', req.body.TransID || req.body.ThirdPartyTransID);
+        return res.json(MPESA_ACCEPTED);
+      }
+
+      await updateCallbackEvent(event?.id, 'FAILED', req.body.TransID || req.body.ThirdPartyTransID, error);
+      console.error('Generic callback C2B processing error:', error);
+      return res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
+    }
+  }
+
   const callbackData = req.body?.Body?.stkCallback;
   
   if (!callbackData) {
     return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
   }
+
+  const event = await createCallbackEvent('STK_CALLBACK', callbackData);
 
   try {
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
@@ -145,63 +312,37 @@ export const handleCallback = async (req: Request, res: Response) => {
 
       if (!mpesaReceiptNumber || !amount || !phoneNumber) {
         console.error('STK callback missing required payment fields:', callbackData);
+        await updateCallbackEvent(event?.id, 'FAILED', undefined, 'STK callback missing required payment fields');
         return res.json({ ResultCode: 0, ResultDesc: 'Accepted but missing receipt' });
-      }
-
-      // 1. Deduplication Check
-      const existingPayment = await prisma.payment.findUnique({
-        where: { transactionCode: String(mpesaReceiptNumber) },
-      });
-
-      if (existingPayment) {
-        console.log(`Payment ${mpesaReceiptNumber} already processed.`);
-        return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
       }
 
       // 2. Parse Date Safely (Format: YYYYMMDDHHmmss)
       const parsedDate = parseMpesaDate(transactionDate);
 
-      // 3. Atomic Database Transaction
-      await prisma.$transaction(async (tx) => {
-        const customer = await tx.customer.upsert({
-          where: { phoneNumber: String(phoneNumber) },
-          update: {
-            totalPaid: { increment: Number(amount) },
-            lastPaidAt: parsedDate,
-          },
-          create: {
-            phoneNumber: String(phoneNumber),
-            totalPaid: Number(amount),
-            lastPaidAt: parsedDate,
-          },
-        });
-
-        await tx.payment.create({
-          data: {
-            transactionCode: String(mpesaReceiptNumber),
-            phoneNumber,
-            amount,
-            status: 'SUCCESS',
-            source: 'STK_PUSH',
-            paidAt: parsedDate,
-            customerId: customer.id,
-            rawCallback: callbackData,
-          },
-        });
+      await recordSuccessfulPayment({
+        transactionCode: String(mpesaReceiptNumber),
+        phoneNumber,
+        amount,
+        source: 'STK_PUSH',
+        paidAt: parsedDate,
+        rawCallback: callbackData as Prisma.InputJsonValue,
       });
 
-      void sendPaymentSms(phoneNumber, amount, String(mpesaReceiptNumber), parsedDate);
+      await updateCallbackEvent(event?.id, 'PROCESSED', String(mpesaReceiptNumber));
     } else {
       console.log('STK Push Failed or Cancelled:', ResultDesc);
+      await updateCallbackEvent(event?.id, 'PROCESSED');
     }
 
     res.json(MPESA_ACCEPTED);
   } catch (error) {
     if (isDuplicateTransactionError(error)) {
       console.log('Duplicate STK callback accepted.');
+      await updateCallbackEvent(event?.id, 'PROCESSED');
       return res.json(MPESA_ACCEPTED);
     }
 
+    await updateCallbackEvent(event?.id, 'FAILED', undefined, error);
     console.error('Callback processing error:', error);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
   }
@@ -352,92 +493,20 @@ export const handleC2BValidation = async (req: Request, res: Response) => {
 
 export const handleC2BConfirmation = async (req: Request, res: Response) => {
   console.log('C2B Confirmation Payload:', req.body);
-  const {
-    TransID,
-    TransAmount,
-    MSISDN,
-    PhoneNumber,
-    FirstName,
-    MiddleName,
-    LastName,
-    TransTime,
-    BillRefNumber,
-    BusinessShortCode,
-    InvoiceNumber,
-    ThirdPartyTransID
-  } = req.body;
-
-  const transactionCode = String(TransID || ThirdPartyTransID || '').trim();
-  const amount = Number(TransAmount);
-  const phoneNumber = normalizePhoneNumber(MSISDN || PhoneNumber);
-
-  if (!transactionCode || !Number.isFinite(amount) || amount <= 0 || !phoneNumber) {
-    console.error('C2B confirmation missing required payment fields:', req.body);
-    return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
-  }
+  const transactionCode = String(req.body?.TransID || req.body?.ThirdPartyTransID || '').trim();
+  const event = await createCallbackEvent('C2B_CONFIRMATION', req.body, transactionCode || undefined);
 
   try {
-    // 1. Deduplication Check
-    const existingPayment = await prisma.payment.findUnique({
-      where: { transactionCode },
-    });
-
-    if (existingPayment) {
-      console.log(`Payment ${transactionCode} already processed.`);
-      return res.json(MPESA_ACCEPTED);
-    }
-
-    // 2. Parse Date Safely (Format: YYYYMMDDHHmmss)
-    const parsedDate = parseMpesaDate(TransTime);
-
-    const customerName = [FirstName, MiddleName, LastName].filter(Boolean).join(' ');
-
-    // 3. Atomic Database Transaction
-    await prisma.$transaction(async (tx) => {
-      const customer = await tx.customer.upsert({
-        where: { phoneNumber },
-        update: {
-          totalPaid: { increment: amount },
-          lastPaidAt: parsedDate,
-          name: customerName || undefined, // Update name if provided
-        },
-        create: {
-          phoneNumber,
-          name: customerName,
-          totalPaid: amount,
-          lastPaidAt: parsedDate,
-        },
-      });
-
-      await tx.payment.create({
-        data: {
-          transactionCode,
-          phoneNumber,
-          customerName: customerName,
-          amount,
-          status: 'SUCCESS',
-          source: 'C2B_TILL',
-          paidAt: parsedDate,
-          customerId: customer.id,
-          rawCallback: {
-            ...req.body,
-            BillRefNumber,
-            BusinessShortCode,
-            InvoiceNumber,
-          },
-        },
-      });
-    });
-
-    void sendPaymentSms(phoneNumber, amount, transactionCode, parsedDate);
-
+    await processC2BPayload(req.body, event?.id);
     res.json(MPESA_ACCEPTED);
   } catch (error) {
     if (isDuplicateTransactionError(error)) {
       console.log(`Duplicate C2B confirmation accepted for ${transactionCode}.`);
+      await updateCallbackEvent(event?.id, 'PROCESSED', transactionCode || undefined);
       return res.json(MPESA_ACCEPTED);
     }
 
+    await updateCallbackEvent(event?.id, 'FAILED', transactionCode || undefined, error);
     console.error('C2B Confirmation error:', error);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
   }

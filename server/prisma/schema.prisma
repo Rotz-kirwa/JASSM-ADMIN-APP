@@ -42,6 +42,21 @@ model Payment {
   customer        Customer? @relation(fields: [customerId], references: [id])
 }
 
+model PaymentCallbackEvent {
+  id              String    @id @default(uuid())
+  eventType       String
+  transactionCode String?
+  status          String    @default("RECEIVED") // RECEIVED, PROCESSED, FAILED
+  payload         Json
+  error           String?
+  processedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([eventType])
+  @@index([transactionCode])
+  @@index([status])
+}
+
 model Customer {
   id           String    @id @default(uuid())
   phoneNumber  String    @unique

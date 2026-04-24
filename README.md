@@ -40,3 +40,10 @@ Content-Type: application/json
 
 { "baseUrl": "https://your-api-domain.com" }
 ```
+
+The server `start` script runs `prisma migrate deploy` before booting, so production tables are created/updated automatically from committed migrations. If your host uses a custom start command, make sure it runs:
+
+```sh
+npm run prisma:deploy --workspace=server
+npm run start --workspace=server
+```

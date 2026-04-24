@@ -1,9 +1,71 @@
 import { Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import mpesaService from '../services/mpesa.service';
 import smsService from '../services/sms.service';
 
 const prisma = new PrismaClient();
+
+const MPESA_ACCEPTED = { ResultCode: 0, ResultDesc: 'Accepted' };
+
+const isDuplicateTransactionError = (error: unknown) => {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
+};
+
+const parseMpesaDate = (value: unknown) => {
+  if (!value) return new Date();
+
+  const dateStr = String(value);
+  if (dateStr.length !== 14) return new Date();
+
+  const year = dateStr.slice(0, 4);
+  const month = dateStr.slice(4, 6);
+  const day = dateStr.slice(6, 8);
+  const hour = dateStr.slice(8, 10);
+  const minute = dateStr.slice(10, 12);
+  const second = dateStr.slice(12, 14);
+
+  return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`);
+};
+
+const getCallbackItemValue = (items: any[] = [], name: string) => {
+  return items.find((item) => item.Name === name)?.Value;
+};
+
+const normalizePhoneNumber = (phoneNumber: unknown) => {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+
+  if (digits.startsWith('0')) return `254${digits.slice(1)}`;
+  if (digits.startsWith('254')) return digits;
+  if (digits.length === 9) return `254${digits}`;
+
+  return digits;
+};
+
+const sendPaymentSms = async (
+  phoneNumber: string,
+  amount: number,
+  transactionCode: string,
+  paidAt: Date
+) => {
+  try {
+    const customer = await prisma.customer.findUnique({ where: { phoneNumber } });
+    const template = await prisma.sMSTemplate.findFirst({ where: { isActive: true } });
+
+    if (!template || !customer) return;
+
+    const message = smsService.parseTemplate(template.content, {
+      name: customer.name || 'Customer',
+      amount: String(amount),
+      transaction_code: transactionCode,
+      date: paidAt.toLocaleDateString('en-KE'),
+      business_name: process.env.BUSINESS_NAME || 'JASSM PAY',
+    });
+
+    await smsService.sendSms(customer.phoneNumber, message);
+  } catch (smsError) {
+    console.error(`Failed to send SMS for payment ${transactionCode}:`, smsError);
+  }
+};
 
 export const getPayments = async (req: Request, res: Response) => {
   const { page = 1, limit = 10, search, startDate, endDate } = req.query;
@@ -15,6 +77,7 @@ export const getPayments = async (req: Request, res: Response) => {
       where.OR = [
         { transactionCode: { contains: String(search), mode: 'insensitive' } },
         { phoneNumber: { contains: String(search) } },
+        { customerName: { contains: String(search), mode: 'insensitive' } },
       ];
     }
     if (startDate && endDate) {
@@ -75,13 +138,13 @@ export const handleCallback = async (req: Request, res: Response) => {
 
     if (ResultCode === 0 && CallbackMetadata) {
       const items = CallbackMetadata.Item;
-      const amount = items.find((i: any) => i.Name === 'Amount')?.Value;
-      const mpesaReceiptNumber = items.find((i: any) => i.Name === 'MpesaReceiptNumber')?.Value;
-      const transactionDate = items.find((i: any) => i.Name === 'TransactionDate')?.Value;
-      const phoneNumber = items.find((i: any) => i.Name === 'PhoneNumber')?.Value;
+      const amount = Number(getCallbackItemValue(items, 'Amount'));
+      const mpesaReceiptNumber = getCallbackItemValue(items, 'MpesaReceiptNumber');
+      const transactionDate = getCallbackItemValue(items, 'TransactionDate');
+      const phoneNumber = normalizePhoneNumber(getCallbackItemValue(items, 'PhoneNumber'));
 
-      if (!mpesaReceiptNumber) {
-        console.error('Callback missing receipt number:', callbackData);
+      if (!mpesaReceiptNumber || !amount || !phoneNumber) {
+        console.error('STK callback missing required payment fields:', callbackData);
         return res.json({ ResultCode: 0, ResultDesc: 'Accepted but missing receipt' });
       }
 
@@ -96,19 +159,7 @@ export const handleCallback = async (req: Request, res: Response) => {
       }
 
       // 2. Parse Date Safely (Format: YYYYMMDDHHmmss)
-      let parsedDate = new Date();
-      if (transactionDate) {
-        const dateStr = String(transactionDate);
-        if (dateStr.length === 14) {
-          const year = dateStr.slice(0, 4);
-          const month = dateStr.slice(4, 6);
-          const day = dateStr.slice(6, 8);
-          const hour = dateStr.slice(8, 10);
-          const minute = dateStr.slice(10, 12);
-          const second = dateStr.slice(12, 14);
-          parsedDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`);
-        }
-      }
+      const parsedDate = parseMpesaDate(transactionDate);
 
       // 3. Atomic Database Transaction
       await prisma.$transaction(async (tx) => {
@@ -128,8 +179,8 @@ export const handleCallback = async (req: Request, res: Response) => {
         await tx.payment.create({
           data: {
             transactionCode: String(mpesaReceiptNumber),
-            phoneNumber: String(phoneNumber),
-            amount: parseFloat(String(amount)),
+            phoneNumber,
+            amount,
             status: 'SUCCESS',
             source: 'STK_PUSH',
             paidAt: parsedDate,
@@ -139,29 +190,18 @@ export const handleCallback = async (req: Request, res: Response) => {
         });
       });
 
-      // 4. Send SMS Notification (non-blocking)
-      try {
-        const customer = await prisma.customer.findUnique({ where: { phoneNumber: String(phoneNumber) } });
-        const template = await prisma.sMSTemplate.findFirst({ where: { isActive: true } });
-        if (template && customer) {
-          const message = smsService.parseTemplate(template.content, {
-            name: customer.name || 'Customer',
-            amount: String(amount),
-            transaction_code: String(mpesaReceiptNumber),
-            date: parsedDate.toLocaleDateString(),
-            business_name: process.env.BUSINESS_NAME || 'MOBOSOFT',
-          });
-          await smsService.sendSms(customer.phoneNumber, message);
-        }
-      } catch (smsError) {
-        console.error('Failed to send SMS for successful payment:', smsError);
-      }
+      void sendPaymentSms(phoneNumber, amount, String(mpesaReceiptNumber), parsedDate);
     } else {
       console.log('STK Push Failed or Cancelled:', ResultDesc);
     }
 
-    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    res.json(MPESA_ACCEPTED);
   } catch (error) {
+    if (isDuplicateTransactionError(error)) {
+      console.log('Duplicate STK callback accepted.');
+      return res.json(MPESA_ACCEPTED);
+    }
+
     console.error('Callback processing error:', error);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
   }
@@ -307,10 +347,7 @@ export const getReports = async (req: Request, res: Response) => {
 export const handleC2BValidation = async (req: Request, res: Response) => {
   // Always accept the payment for this use case
   console.log('C2B Validation Payload:', req.body);
-  res.json({
-    ResultCode: 0,
-    ResultDesc: 'Accepted',
-  });
+  res.json(MPESA_ACCEPTED);
 };
 
 export const handleC2BConfirmation = async (req: Request, res: Response) => {
@@ -319,96 +356,88 @@ export const handleC2BConfirmation = async (req: Request, res: Response) => {
     TransID,
     TransAmount,
     MSISDN,
+    PhoneNumber,
     FirstName,
     MiddleName,
     LastName,
-    TransTime
+    TransTime,
+    BillRefNumber,
+    BusinessShortCode,
+    InvoiceNumber,
+    ThirdPartyTransID
   } = req.body;
 
-  if (!TransID) {
+  const transactionCode = String(TransID || ThirdPartyTransID || '').trim();
+  const amount = Number(TransAmount);
+  const phoneNumber = normalizePhoneNumber(MSISDN || PhoneNumber);
+
+  if (!transactionCode || !Number.isFinite(amount) || amount <= 0 || !phoneNumber) {
+    console.error('C2B confirmation missing required payment fields:', req.body);
     return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
   }
 
   try {
     // 1. Deduplication Check
     const existingPayment = await prisma.payment.findUnique({
-      where: { transactionCode: String(TransID) },
+      where: { transactionCode },
     });
 
     if (existingPayment) {
-      console.log(`Payment ${TransID} already processed.`);
-      return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+      console.log(`Payment ${transactionCode} already processed.`);
+      return res.json(MPESA_ACCEPTED);
     }
 
     // 2. Parse Date Safely (Format: YYYYMMDDHHmmss)
-    let parsedDate = new Date();
-    if (TransTime) {
-      const dateStr = String(TransTime);
-      if (dateStr.length === 14) {
-        const year = dateStr.slice(0, 4);
-        const month = dateStr.slice(4, 6);
-        const day = dateStr.slice(6, 8);
-        const hour = dateStr.slice(8, 10);
-        const minute = dateStr.slice(10, 12);
-        const second = dateStr.slice(12, 14);
-        parsedDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`);
-      }
-    }
+    const parsedDate = parseMpesaDate(TransTime);
 
     const customerName = [FirstName, MiddleName, LastName].filter(Boolean).join(' ');
 
     // 3. Atomic Database Transaction
     await prisma.$transaction(async (tx) => {
       const customer = await tx.customer.upsert({
-        where: { phoneNumber: String(MSISDN) },
+        where: { phoneNumber },
         update: {
-          totalPaid: { increment: Number(TransAmount) },
+          totalPaid: { increment: amount },
           lastPaidAt: parsedDate,
           name: customerName || undefined, // Update name if provided
         },
         create: {
-          phoneNumber: String(MSISDN),
+          phoneNumber,
           name: customerName,
-          totalPaid: Number(TransAmount),
+          totalPaid: amount,
           lastPaidAt: parsedDate,
         },
       });
 
       await tx.payment.create({
         data: {
-          transactionCode: String(TransID),
-          phoneNumber: String(MSISDN),
+          transactionCode,
+          phoneNumber,
           customerName: customerName,
-          amount: parseFloat(String(TransAmount)),
+          amount,
           status: 'SUCCESS',
           source: 'C2B_TILL',
           paidAt: parsedDate,
           customerId: customer.id,
-          rawCallback: req.body,
+          rawCallback: {
+            ...req.body,
+            BillRefNumber,
+            BusinessShortCode,
+            InvoiceNumber,
+          },
         },
       });
     });
 
-    // 4. Send SMS Notification (non-blocking)
-    try {
-      const customer = await prisma.customer.findUnique({ where: { phoneNumber: String(MSISDN) } });
-      const template = await prisma.sMSTemplate.findFirst({ where: { isActive: true } });
-      if (template && customer) {
-        const message = smsService.parseTemplate(template.content, {
-          name: customer.name || 'Customer',
-          amount: String(TransAmount),
-          transaction_code: String(TransID),
-          date: parsedDate.toLocaleDateString(),
-          business_name: process.env.BUSINESS_NAME || 'MOBOSOFT',
-        });
-        await smsService.sendSms(customer.phoneNumber, message);
-      }
-    } catch (smsError) {
-      console.error('Failed to send SMS for successful C2B payment:', smsError);
+    void sendPaymentSms(phoneNumber, amount, transactionCode, parsedDate);
+
+    res.json(MPESA_ACCEPTED);
+  } catch (error) {
+    if (isDuplicateTransactionError(error)) {
+      console.log(`Duplicate C2B confirmation accepted for ${transactionCode}.`);
+      return res.json(MPESA_ACCEPTED);
     }
 
-    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-  } catch (error) {
     console.error('C2B Confirmation error:', error);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
   }
@@ -416,8 +445,8 @@ export const handleC2BConfirmation = async (req: Request, res: Response) => {
 
 export const registerC2B = async (req: Request, res: Response) => {
   try {
-    // Attempt to guess the base URL if not provided
-    const baseUrl = req.body.baseUrl || `${req.protocol}://${req.get('host')}`;
+    const baseUrl = String(req.body.baseUrl || process.env.PUBLIC_API_BASE_URL || `${req.protocol}://${req.get('host')}`)
+      .replace(/\/$/, '');
     
     const validationUrl = `${baseUrl}/api/payments/c2b/validation`;
     const confirmationUrl = `${baseUrl}/api/payments/c2b/confirmation`;

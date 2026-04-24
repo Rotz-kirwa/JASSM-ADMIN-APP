@@ -18,7 +18,22 @@ class MpesaService {
       : 'https://api.safaricom.co.ke';
   }
 
+  private requireConfig(values: Record<string, string | undefined>) {
+    const missing = Object.entries(values)
+      .filter(([, value]) => !value)
+      .map(([key]) => key);
+
+    if (missing.length > 0) {
+      throw new Error(`Missing M-Pesa configuration: ${missing.join(', ')}`);
+    }
+  }
+
   async getAccessToken() {
+    this.requireConfig({
+      MPESA_CONSUMER_KEY: this.consumerKey,
+      MPESA_CONSUMER_SECRET: this.consumerSecret,
+    });
+
     const auth = Buffer.from(`${this.consumerKey}:${this.consumerSecret}`).toString('base64');
     try {
       const response = await axios.get(
@@ -33,6 +48,12 @@ class MpesaService {
   }
 
   async stkPush(phoneNumber: string, amount: number, accountReference: string, transactionDesc: string) {
+    this.requireConfig({
+      MPESA_TILL_NUMBER: this.tillNumber,
+      MPESA_PASSKEY: this.passkey,
+      MPESA_CALLBACK_URL: this.callbackUrl,
+    });
+
     const accessToken = await this.getAccessToken();
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
 
@@ -72,6 +93,10 @@ class MpesaService {
   }
 
   async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
+    this.requireConfig({
+      MPESA_TILL_NUMBER: this.tillNumber,
+    });
+
     const accessToken = await this.getAccessToken();
 
     try {

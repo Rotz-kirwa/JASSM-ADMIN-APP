@@ -17,6 +17,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const prisma = new PrismaClient();
 
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'secret')) {
+  throw new Error('JWT_SECRET must be set to a strong value in production');
+}
+
 // Middleware
 app.use(cors());
 app.use(helmet());
@@ -56,14 +60,20 @@ async function seedIfEmpty() {
         await prisma.role.upsert({ where: { name: role.name }, update: {}, create: role });
       }
 
+      const initialAdminEmail = process.env.INITIAL_ADMIN_EMAIL;
+      const initialAdminPassword = process.env.INITIAL_ADMIN_PASSWORD;
+      const allowDevAdmin = process.env.NODE_ENV !== 'production';
+      const adminEmail = initialAdminEmail || (allowDevAdmin ? 'eliudkirwa451@gmail.com' : undefined);
+      const adminPassword = initialAdminPassword || (allowDevAdmin ? 'admin123' : undefined);
+
       const superAdminRole = await prisma.role.findUnique({ where: { name: 'SUPER_ADMIN' } });
-      if (superAdminRole) {
-        const hashedPassword = await bcrypt.hash('admin123', 10);
+      if (superAdminRole && adminEmail && adminPassword) {
+        const hashedPassword = await bcrypt.hash(adminPassword, 10);
         await prisma.user.upsert({
-          where: { email: 'eliudkirwa451@gmail.com' },
+          where: { email: adminEmail },
           update: {},
           create: {
-            email: 'eliudkirwa451@gmail.com',
+            email: adminEmail,
             name: 'Super Admin',
             password: hashedPassword,
             roleId: superAdminRole.id,
@@ -81,7 +91,11 @@ async function seedIfEmpty() {
         },
       });
 
-      console.log('==> Seed completed. Admin: eliudkirwa451@gmail.com / admin123');
+      if (adminEmail) {
+        console.log(`==> Seed completed. Initial admin: ${adminEmail}`);
+      } else {
+        console.log('==> Seed completed. Set INITIAL_ADMIN_EMAIL and INITIAL_ADMIN_PASSWORD to create an initial admin.');
+      }
     }
   } catch (err) {
     console.error('Auto-seed error:', err);

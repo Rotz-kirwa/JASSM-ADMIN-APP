@@ -20,15 +20,19 @@ async function main() {
     });
   }
 
-  // Create Super Admin
+  // Create Super Admin. Production must provide explicit credentials.
   const superAdminRole = await prisma.role.findUnique({ where: { name: 'SUPER_ADMIN' } });
-  if (superAdminRole) {
-    const hashedPassword = await bcrypt.hash('admin123', 10);
+  const allowDevAdmin = process.env.NODE_ENV !== 'production';
+  const adminEmail = process.env.INITIAL_ADMIN_EMAIL || (allowDevAdmin ? 'eliudkirwa451@gmail.com' : undefined);
+  const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || (allowDevAdmin ? 'admin123' : undefined);
+
+  if (superAdminRole && adminEmail && adminPassword) {
+    const hashedPassword = await bcrypt.hash(adminPassword, 10);
     await prisma.user.upsert({
-      where: { email: 'eliudkirwa451@gmail.com' },
+      where: { email: adminEmail },
       update: {},
       create: {
-        email: 'eliudkirwa451@gmail.com',
+        email: adminEmail,
         name: 'Super Admin',
         password: hashedPassword,
         roleId: superAdminRole.id,

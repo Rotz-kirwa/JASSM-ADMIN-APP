@@ -1,1 +1,42 @@
 # JASSM-ADMIN-APP
+
+Admin dashboard for JASSM PAY M-Pesa collections, customers, SMS notifications, and financial reports.
+
+## Production Checklist
+
+Set these server environment variables before deploying:
+
+- `NODE_ENV=production`
+- `DATABASE_URL`
+- `JWT_SECRET`
+- `PUBLIC_API_BASE_URL`, for example `https://jassm-admin-app.onrender.com`
+- `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` for first production boot
+- `MPESA_ENVIRONMENT=production`
+- `MPESA_CONSUMER_KEY`
+- `MPESA_CONSUMER_SECRET`
+- `MPESA_SHORTCODE`
+- `MPESA_TILL_NUMBER`
+- `MPESA_PASSKEY`
+- `MPESA_CALLBACK_URL`, for STK push callbacks
+- `SMS_API_KEY`, `SMS_USERNAME`, and optional `SMS_SENDER_ID`
+
+Set `VITE_API_BASE_URL` for the client build, for example:
+
+```sh
+VITE_API_BASE_URL=https://jassm-admin-app.onrender.com/api
+```
+
+Manual Till payments require Safaricom C2B URLs to be registered against the production Till number:
+
+- Validation URL: `https://your-api-domain.com/api/payments/c2b/validation`
+- Confirmation URL: `https://your-api-domain.com/api/payments/c2b/confirmation`
+
+After logging in as a `SUPER_ADMIN`, the backend can register those URLs through:
+
+```sh
+POST /api/payments/c2b/register
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "baseUrl": "https://your-api-domain.com" }
+```

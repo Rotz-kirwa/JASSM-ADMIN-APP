@@ -9,7 +9,7 @@ import {
   handleC2BConfirmation,
   registerC2B
 } from '../controllers/payment.controller';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, authorize } from '../middleware/auth.middleware';
 
 const router = Router();
 
@@ -22,6 +22,6 @@ router.post('/callback', handleCallback); // Public callback endpoint
 // C2B Endpoints
 router.post('/c2b/validation', handleC2BValidation);
 router.post('/c2b/confirmation', handleC2BConfirmation);
-router.post('/c2b/register', registerC2B);
+router.post('/c2b/register', authenticate, authorize(['SUPER_ADMIN']), registerC2B);
 
 export default router;

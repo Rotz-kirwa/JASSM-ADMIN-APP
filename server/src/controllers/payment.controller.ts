@@ -41,6 +41,21 @@ const normalizePhoneNumber = (phoneNumber: unknown) => {
   return digits;
 };
 
+const normalizeCallbackBody = (body: unknown) => {
+  if (typeof body !== 'string') return body || {};
+
+  const trimmed = body.trim();
+  if (!trimmed) return {};
+
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    const params = new URLSearchParams(trimmed);
+    const parsed = Object.fromEntries(params.entries());
+    return Object.keys(parsed).length > 0 ? parsed : { rawBody: trimmed };
+  }
+};
+
 const sendPaymentSms = async (
   phoneNumber: string,
   amount: number,
@@ -298,25 +313,27 @@ export const triggerStkPush = async (req: Request, res: Response) => {
 };
 
 export const handleCallback = async (req: Request, res: Response) => {
-  if (!req.body?.Body?.stkCallback && (req.body?.TransID || req.body?.ThirdPartyTransID)) {
-    const event = await createCallbackEvent('C2B_GENERIC_CALLBACK', req.body, req.body.TransID || req.body.ThirdPartyTransID);
+  const body = normalizeCallbackBody(req.body) as any;
+
+  if (!body?.Body?.stkCallback && (body?.TransID || body?.ThirdPartyTransID)) {
+    const event = await createCallbackEvent('C2B_GENERIC_CALLBACK', body, body.TransID || body.ThirdPartyTransID);
 
     try {
-      await processC2BPayload(req.body, event?.id);
+      await processC2BPayload(body, event?.id);
       return res.json(MPESA_ACCEPTED);
     } catch (error) {
       if (isDuplicateTransactionError(error)) {
-        await updateCallbackEvent(event?.id, 'PROCESSED', req.body.TransID || req.body.ThirdPartyTransID);
+        await updateCallbackEvent(event?.id, 'PROCESSED', body.TransID || body.ThirdPartyTransID);
         return res.json(MPESA_ACCEPTED);
       }
 
-      await updateCallbackEvent(event?.id, 'FAILED', req.body.TransID || req.body.ThirdPartyTransID, error);
+      await updateCallbackEvent(event?.id, 'FAILED', body.TransID || body.ThirdPartyTransID, error);
       console.error('Generic callback C2B processing error:', error);
       return res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
     }
   }
 
-  const callbackData = req.body?.Body?.stkCallback;
+  const callbackData = body?.Body?.stkCallback;
   
   if (!callbackData) {
     return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
@@ -511,17 +528,20 @@ export const getReports = async (req: Request, res: Response) => {
 // C2B Endpoints
 export const handleC2BValidation = async (req: Request, res: Response) => {
   // Always accept the payment for this use case
-  console.log('C2B Validation Payload:', req.body);
+  const body = normalizeCallbackBody(req.body);
+  console.log('C2B Validation Payload:', body);
+  await createCallbackEvent('C2B_VALIDATION', body);
   res.json(MPESA_ACCEPTED);
 };
 
 export const handleC2BConfirmation = async (req: Request, res: Response) => {
-  console.log('C2B Confirmation Payload:', req.body);
-  const transactionCode = String(req.body?.TransID || req.body?.ThirdPartyTransID || '').trim();
-  const event = await createCallbackEvent('C2B_CONFIRMATION', req.body, transactionCode || undefined);
+  const body = normalizeCallbackBody(req.body) as any;
+  console.log('C2B Confirmation Payload:', body);
+  const transactionCode = String(body?.TransID || body?.ThirdPartyTransID || '').trim();
+  const event = await createCallbackEvent('C2B_CONFIRMATION', body, transactionCode || undefined);
 
   try {
-    await processC2BPayload(req.body, event?.id);
+    await processC2BPayload(body, event?.id);
     res.json(MPESA_ACCEPTED);
   } catch (error) {
     if (isDuplicateTransactionError(error)) {

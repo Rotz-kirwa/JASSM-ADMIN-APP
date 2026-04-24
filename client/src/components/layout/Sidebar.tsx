@@ -10,6 +10,7 @@ import {
   BarChart3,
   History
 } from 'lucide-react';
+import { clearAuth } from '../../lib/api';
 
 const Sidebar = () => {
   const navigate = useNavigate();
@@ -53,7 +54,7 @@ const Sidebar = () => {
       <div className="p-4 border-t border-slate-800">
         <button 
           onClick={() => {
-            localStorage.removeItem('isAuthenticated');
+            clearAuth();
             navigate('/login');
           }}
           className="flex items-center space-x-3 p-3 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all"

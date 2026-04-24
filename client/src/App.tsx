@@ -1,5 +1,5 @@
-import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Sidebar from './components/layout/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Transactions from './pages/Transactions';
@@ -7,15 +7,51 @@ import SMSManager from './pages/SMSManager';
 import Customers from './pages/Customers';
 import Reports from './pages/Reports';
 import Login from './pages/Login';
+import { apiFetch, clearAuth, getToken } from './lib/api';
 
 // Placeholder components
 const Settings = () => <div className="p-8"><h1 className="text-2xl font-bold">Settings</h1><p className="text-slate-500">System settings coming soon...</p></div>;
 
 const ProtectedLayout = ({ children }: { children: React.ReactNode }) => {
-  const token = localStorage.getItem('token');
-  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true' && !!token;
+  const location = useLocation();
+  const [authStatus, setAuthStatus] = useState<'checking' | 'valid' | 'invalid'>('checking');
 
-  if (!isAuthenticated) {
+  useEffect(() => {
+    let cancelled = false;
+
+    const verifySession = async () => {
+      const token = getToken();
+      if (!token) {
+        clearAuth();
+        setAuthStatus('invalid');
+        return;
+      }
+
+      try {
+        const res = await apiFetch('/auth/me');
+        if (!cancelled) setAuthStatus(res.ok ? 'valid' : 'invalid');
+      } catch {
+        if (!cancelled) setAuthStatus('invalid');
+      }
+    };
+
+    setAuthStatus('checking');
+    verifySession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname]);
+
+  if (authStatus === 'checking') {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300">
+        Verifying session...
+      </div>
+    );
+  }
+
+  if (authStatus === 'invalid') {
     return <Navigate to="/login" />;
   }
 

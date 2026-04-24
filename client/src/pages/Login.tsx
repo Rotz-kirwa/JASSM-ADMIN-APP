@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Lock, Mail, ArrowRight, ShieldCheck, AlertCircle } from 'lucide-react';
-import API_BASE from '../lib/api';
+import API_BASE, { setAuthToken } from '../lib/api';
 
 const Login = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
@@ -29,8 +30,7 @@ const Login = () => {
         return;
       }
 
-      localStorage.setItem('token', data.token);
-      localStorage.setItem('isAuthenticated', 'true');
+      setAuthToken(data.token, remember);
       navigate('/');
     } catch (err) {
       setError('Server is unreachable. Please try again.');
@@ -94,7 +94,12 @@ const Login = () => {
 
           <div className="flex items-center justify-between text-sm">
             <label className="flex items-center space-x-2 text-slate-400 cursor-pointer group">
-              <input type="checkbox" className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-blue-600 focus:ring-0 focus:ring-offset-0" />
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-700 bg-slate-800 text-blue-600 focus:ring-0 focus:ring-offset-0"
+              />
               <span className="group-hover:text-slate-300 transition-colors">Remember me</span>
             </label>
             <a href="#" className="text-blue-400 hover:text-blue-300 transition-colors font-medium">Forgot password?</a>

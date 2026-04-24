@@ -1,7 +1,19 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'https://jassm-admin-app.onrender.com/api';
 
-function getToken() {
-  return localStorage.getItem('token');
+export function getToken() {
+  return sessionStorage.getItem('token') || localStorage.getItem('token');
+}
+
+export function setAuthToken(token: string, remember = false) {
+  clearAuth();
+  const storage = remember ? localStorage : sessionStorage;
+  storage.setItem('token', token);
+}
+
+export function clearAuth() {
+  sessionStorage.removeItem('token');
+  localStorage.removeItem('token');
+  localStorage.removeItem('isAuthenticated');
 }
 
 export async function apiFetch(path: string, options: RequestInit = {}) {
@@ -16,8 +28,7 @@ export async function apiFetch(path: string, options: RequestInit = {}) {
   });
 
   if (res.status === 401) {
-    localStorage.removeItem('token');
-    localStorage.removeItem('isAuthenticated');
+    clearAuth();
     window.location.href = '/login';
     throw new Error('Unauthorized');
   }

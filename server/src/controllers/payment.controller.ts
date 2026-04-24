@@ -302,3 +302,129 @@ export const getReports = async (req: Request, res: Response) => {
     res.status(500).json({ message: 'Error generating report' });
   }
 };
+
+// C2B Endpoints
+export const handleC2BValidation = async (req: Request, res: Response) => {
+  // Always accept the payment for this use case
+  console.log('C2B Validation Payload:', req.body);
+  res.json({
+    ResultCode: 0,
+    ResultDesc: 'Accepted',
+  });
+};
+
+export const handleC2BConfirmation = async (req: Request, res: Response) => {
+  console.log('C2B Confirmation Payload:', req.body);
+  const {
+    TransID,
+    TransAmount,
+    MSISDN,
+    FirstName,
+    MiddleName,
+    LastName,
+    TransTime
+  } = req.body;
+
+  if (!TransID) {
+    return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
+  }
+
+  try {
+    // 1. Deduplication Check
+    const existingPayment = await prisma.payment.findUnique({
+      where: { transactionCode: String(TransID) },
+    });
+
+    if (existingPayment) {
+      console.log(`Payment ${TransID} already processed.`);
+      return res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    // 2. Parse Date Safely (Format: YYYYMMDDHHmmss)
+    let parsedDate = new Date();
+    if (TransTime) {
+      const dateStr = String(TransTime);
+      if (dateStr.length === 14) {
+        const year = dateStr.slice(0, 4);
+        const month = dateStr.slice(4, 6);
+        const day = dateStr.slice(6, 8);
+        const hour = dateStr.slice(8, 10);
+        const minute = dateStr.slice(10, 12);
+        const second = dateStr.slice(12, 14);
+        parsedDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}+03:00`);
+      }
+    }
+
+    const customerName = [FirstName, MiddleName, LastName].filter(Boolean).join(' ');
+
+    // 3. Atomic Database Transaction
+    await prisma.$transaction(async (tx) => {
+      const customer = await tx.customer.upsert({
+        where: { phoneNumber: String(MSISDN) },
+        update: {
+          totalPaid: { increment: Number(TransAmount) },
+          lastPaidAt: parsedDate,
+          name: customerName || undefined, // Update name if provided
+        },
+        create: {
+          phoneNumber: String(MSISDN),
+          name: customerName,
+          totalPaid: Number(TransAmount),
+          lastPaidAt: parsedDate,
+        },
+      });
+
+      await tx.payment.create({
+        data: {
+          transactionCode: String(TransID),
+          phoneNumber: String(MSISDN),
+          customerName: customerName,
+          amount: parseFloat(String(TransAmount)),
+          status: 'SUCCESS',
+          source: 'C2B_TILL',
+          paidAt: parsedDate,
+          customerId: customer.id,
+          rawCallback: req.body,
+        },
+      });
+    });
+
+    // 4. Send SMS Notification (non-blocking)
+    try {
+      const customer = await prisma.customer.findUnique({ where: { phoneNumber: String(MSISDN) } });
+      const template = await prisma.sMSTemplate.findFirst({ where: { isActive: true } });
+      if (template && customer) {
+        const message = smsService.parseTemplate(template.content, {
+          name: customer.name || 'Customer',
+          amount: String(TransAmount),
+          transaction_code: String(TransID),
+          date: parsedDate.toLocaleDateString(),
+          business_name: process.env.BUSINESS_NAME || 'MOBOSOFT',
+        });
+        await smsService.sendSms(customer.phoneNumber, message);
+      }
+    } catch (smsError) {
+      console.error('Failed to send SMS for successful C2B payment:', smsError);
+    }
+
+    res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
+  } catch (error) {
+    console.error('C2B Confirmation error:', error);
+    res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
+  }
+};
+
+export const registerC2B = async (req: Request, res: Response) => {
+  try {
+    // Attempt to guess the base URL if not provided
+    const baseUrl = req.body.baseUrl || `${req.protocol}://${req.get('host')}`;
+    
+    const validationUrl = `${baseUrl}/api/payments/c2b/validation`;
+    const confirmationUrl = `${baseUrl}/api/payments/c2b/confirmation`;
+
+    const result = await mpesaService.registerC2BUrls(validationUrl, confirmationUrl);
+    res.json({ message: 'C2B URLs registered successfully', result });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};

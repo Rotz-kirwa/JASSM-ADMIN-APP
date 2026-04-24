@@ -75,6 +75,31 @@ class MpesaService {
       throw new Error('M-Pesa STK Push failed');
     }
   }
+
+  async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
+    const accessToken = await this.getAccessToken();
+
+    try {
+      const response = await axios.post(
+        `${this.baseUrl}/mpesa/c2b/v1/registerurl`,
+        {
+          ShortCode: this.shortCode,
+          ResponseType: 'Completed',
+          ConfirmationURL: confirmationUrl,
+          ValidationURL: validationUrl,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      return response.data;
+    } catch (error: any) {
+      console.error('Error registering C2B URLs:', error.response?.data || error.message);
+      throw new Error('Failed to register C2B URLs');
+    }
+  }
 }
 
 export default new MpesaService();

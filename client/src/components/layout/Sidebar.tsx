@@ -52,7 +52,10 @@ const Sidebar = () => {
 
       <div className="p-4 border-t border-slate-800">
         <button 
-          onClick={() => navigate('/login')}
+          onClick={() => {
+            localStorage.removeItem('isAuthenticated');
+            navigate('/login');
+          }}
           className="flex items-center space-x-3 p-3 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
         >
           <LogOut size={20} />

@@ -10,6 +10,7 @@ const Login = () => {
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     // Simulate login
+    localStorage.setItem('isAuthenticated', 'true');
     navigate('/');
   };
 

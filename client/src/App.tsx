@@ -12,7 +12,7 @@ import Login from './pages/Login';
 const Settings = () => <div className="p-8"><h1 className="text-2xl font-bold">Settings</h1><p className="text-slate-500">System settings coming soon...</p></div>;
 
 const ProtectedLayout = ({ children }: { children: React.ReactNode }) => {
-  const isAuthenticated = true;
+  const isAuthenticated = localStorage.getItem('isAuthenticated') === 'true';
 
   if (!isAuthenticated) {
     return <Navigate to="/login" />;

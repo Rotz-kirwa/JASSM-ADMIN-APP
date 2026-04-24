@@ -6,11 +6,11 @@ dotenv.config();
 class MpesaService {
   private consumerKey = process.env.MPESA_CONSUMER_KEY;
   private consumerSecret = process.env.MPESA_CONSUMER_SECRET;
-  private shortCode = process.env.MPESA_SHORTCODE;
+  private shortCode = process.env.MPESA_SHORTCODE;      // Paybill/Head Office: 6270335
+  private tillNumber = process.env.MPESA_TILL_NUMBER || process.env.MPESA_SHORTCODE; // Till: 895858
   private passkey = process.env.MPESA_PASSKEY;
   private environment = process.env.MPESA_ENVIRONMENT || 'sandbox';
   private callbackUrl = process.env.MPESA_CALLBACK_URL;
-  private tillNumber = process.env.MPESA_TILL_NUMBER || this.shortCode;
 
   private get baseUrl() {
     return this.environment === 'sandbox'
@@ -23,11 +23,7 @@ class MpesaService {
     try {
       const response = await axios.get(
         `${this.baseUrl}/oauth/v1/generate?grant_type=client_credentials`,
-        {
-          headers: {
-            Authorization: `Basic ${auth}`,
-          },
-        }
+        { headers: { Authorization: `Basic ${auth}` } }
       );
       return response.data.access_token;
     } catch (error: any) {
@@ -39,23 +35,26 @@ class MpesaService {
   async stkPush(phoneNumber: string, amount: number, accountReference: string, transactionDesc: string) {
     const accessToken = await this.getAccessToken();
     const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-    const password = Buffer.from(`${this.shortCode}${this.passkey}${timestamp}`).toString('base64');
 
-    const formattedPhone = phoneNumber.startsWith('0') 
-      ? `254${phoneNumber.slice(1)}` 
-      : phoneNumber.startsWith('+') 
-        ? phoneNumber.slice(1) 
+    // BUG FIX: For CustomerBuyGoodsOnline, BusinessShortCode = Till Number (895858)
+    // Password = Base64(TillNumber + Passkey + Timestamp)
+    const password = Buffer.from(`${this.tillNumber}${this.passkey}${timestamp}`).toString('base64');
+
+    const formattedPhone = phoneNumber.startsWith('0')
+      ? `254${phoneNumber.slice(1)}`
+      : phoneNumber.startsWith('+')
+        ? phoneNumber.slice(1)
         : phoneNumber;
 
     try {
       const response = await axios.post(
         `${this.baseUrl}/mpesa/stkpush/v1/processrequest`,
         {
-          BusinessShortCode: this.shortCode,
+          BusinessShortCode: this.tillNumber,   // BUG FIX: was this.shortCode
           Password: password,
           Timestamp: timestamp,
           TransactionType: 'CustomerBuyGoodsOnline',
-          Amount: amount,
+          Amount: Math.ceil(amount),            // M-Pesa requires whole numbers
           PartyA: formattedPhone,
           PartyB: this.tillNumber,
           PhoneNumber: formattedPhone,
@@ -63,11 +62,7 @@ class MpesaService {
           AccountReference: accountReference,
           TransactionDesc: transactionDesc,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        }
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       return response.data;
     } catch (error: any) {
@@ -80,19 +75,16 @@ class MpesaService {
     const accessToken = await this.getAccessToken();
 
     try {
+      // BUG FIX: Use tillNumber (895858) not shortCode (6270335) for Buy Goods C2B
       const response = await axios.post(
         `${this.baseUrl}/mpesa/c2b/v1/registerurl`,
         {
-          ShortCode: this.shortCode,
+          ShortCode: this.tillNumber,   // BUG FIX: was this.shortCode
           ResponseType: 'Completed',
           ConfirmationURL: confirmationUrl,
           ValidationURL: validationUrl,
         },
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        }
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       return response.data;
     } catch (error: any) {

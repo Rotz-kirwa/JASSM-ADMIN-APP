@@ -56,6 +56,53 @@ const normalizeCallbackBody = (body: unknown) => {
   }
 };
 
+const toJsonValue = (value: unknown): Prisma.InputJsonValue => {
+  return JSON.parse(JSON.stringify(value ?? {}));
+};
+
+const getSafeHeaders = (req: Request) => {
+  const allowedHeaders = [
+    'host',
+    'user-agent',
+    'content-type',
+    'content-length',
+    'x-forwarded-for',
+    'x-real-ip',
+    'x-request-id',
+  ];
+
+  return allowedHeaders.reduce<Record<string, string>>((headers, key) => {
+    const value = req.headers[key];
+    if (typeof value === 'string') headers[key] = value;
+    if (Array.isArray(value)) headers[key] = value.join(', ');
+    return headers;
+  }, {});
+};
+
+const logCallbackActivity = async (
+  callbackEventId: string | undefined,
+  stage: string,
+  message: string,
+  details?: unknown,
+  level: 'INFO' | 'WARN' | 'ERROR' = 'INFO'
+) => {
+  if (!callbackEventId) return;
+
+  try {
+    await prisma.paymentActivityLog.create({
+      data: {
+        callbackEventId,
+        level,
+        stage,
+        message,
+        details: details === undefined ? undefined : toJsonValue(details),
+      },
+    });
+  } catch (error) {
+    console.error('Failed to record payment activity log:', error);
+  }
+};
+
 const sendPaymentSms = async (
   phoneNumber: string,
   amount: number,
@@ -85,16 +132,35 @@ const sendPaymentSms = async (
 const createCallbackEvent = async (
   eventType: string,
   payload: unknown,
-  transactionCode?: string
+  transactionCode?: string,
+  req?: Request
 ) => {
   try {
-    return await prisma.paymentCallbackEvent.create({
+    const event = await prisma.paymentCallbackEvent.create({
       data: {
         eventType,
         transactionCode,
-        payload: (payload ?? {}) as Prisma.InputJsonValue,
+        method: req?.method,
+        path: req?.originalUrl || req?.path,
+        contentType: req?.headers['content-type'],
+        userAgent: req?.headers['user-agent'],
+        ip: req?.ip,
+        headers: req ? toJsonValue(getSafeHeaders(req)) : undefined,
+        query: req ? toJsonValue(req.query) : undefined,
+        rawBody: req ? (req as any).rawBody : undefined,
+        payload: toJsonValue(payload),
       },
     });
+
+    await logCallbackActivity(event.id, 'received', `${eventType} received`, {
+      contentType: req?.headers['content-type'],
+      method: req?.method,
+      path: req?.originalUrl || req?.path,
+      hasRawBody: Boolean(req && (req as any).rawBody),
+      payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload as Record<string, unknown>) : [],
+    });
+
+    return event;
   } catch (error) {
     console.error(`Failed to record ${eventType} callback event:`, error);
     return null;
@@ -105,7 +171,8 @@ const updateCallbackEvent = async (
   id: string | undefined,
   status: 'PROCESSED' | 'FAILED',
   transactionCode?: string,
-  error?: unknown
+  error?: unknown,
+  paymentId?: string
 ) => {
   if (!id) return;
 
@@ -115,6 +182,7 @@ const updateCallbackEvent = async (
       data: {
         status,
         transactionCode,
+        paymentId,
         error: error ? String(error instanceof Error ? error.message : error).slice(0, 2000) : undefined,
         processedAt: new Date(),
       },
@@ -184,6 +252,10 @@ const recordSuccessfulPayment = async ({
 };
 
 const processC2BPayload = async (payload: any, eventId?: string) => {
+  await logCallbackActivity(eventId, 'parse', 'Parsing C2B payload', {
+    payloadKeys: payload && typeof payload === 'object' ? Object.keys(payload) : [],
+  });
+
   const {
     TransID,
     TransAmount,
@@ -204,11 +276,29 @@ const processC2BPayload = async (payload: any, eventId?: string) => {
   const phoneNumber = normalizePhoneNumber(MSISDN || PhoneNumber);
 
   if (!transactionCode || !Number.isFinite(amount) || amount <= 0 || !phoneNumber) {
+    await logCallbackActivity(eventId, 'validation_failed', 'C2B payload is missing required fields', {
+      transactionCode,
+      amount,
+      phoneNumber,
+      rawTransAmount: TransAmount,
+      rawPhone: MSISDN || PhoneNumber,
+    }, 'ERROR');
     throw new Error('C2B confirmation missing transaction code, amount, or phone number');
   }
 
+  await logCallbackActivity(eventId, 'validated', 'C2B payload validated', {
+    transactionCode,
+    amount,
+    phoneNumber,
+  });
+
   const paidAt = parseMpesaDate(TransTime);
   const customerName = [FirstName, MiddleName, LastName].filter(Boolean).join(' ');
+
+  await logCallbackActivity(eventId, 'recording_payment', 'Creating or reusing payment record', {
+    transactionCode,
+    source: 'C2B_TILL',
+  });
 
   const payment = await recordSuccessfulPayment({
     transactionCode,
@@ -225,7 +315,12 @@ const processC2BPayload = async (payload: any, eventId?: string) => {
     } as Prisma.InputJsonValue,
   });
 
-  await updateCallbackEvent(eventId, 'PROCESSED', transactionCode);
+  await logCallbackActivity(eventId, 'recorded', 'Payment processing completed', {
+    paymentId: payment.id,
+    transactionCode: payment.transactionCode,
+    amount: payment.amount,
+  });
+  await updateCallbackEvent(eventId, 'PROCESSED', transactionCode, undefined, payment.id);
   return payment;
 };
 
@@ -285,14 +380,44 @@ export const getCallbackEvents = async (req: Request, res: Response) => {
         transactionCode: true,
         status: true,
         error: true,
+        method: true,
+        path: true,
+        contentType: true,
+        paymentId: true,
         createdAt: true,
         processedAt: true,
+        _count: {
+          select: { logs: true },
+        },
       },
     });
 
     res.json({ events });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching callback events' });
+  }
+};
+
+export const getCallbackEventById = async (req: Request, res: Response) => {
+  const { id } = req.params;
+
+  try {
+    const event = await prisma.paymentCallbackEvent.findUnique({
+      where: { id },
+      include: {
+        logs: {
+          orderBy: { createdAt: 'asc' },
+        },
+      },
+    });
+
+    if (!event) {
+      return res.status(404).json({ message: 'Callback event not found' });
+    }
+
+    res.json(event);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching callback event' });
   }
 };
 

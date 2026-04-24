@@ -8,13 +8,18 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
-  Radio
+  Radio,
+  RefreshCw,
+  X,
+  FileJson
 } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
 const Transactions = () => {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [callbackEvents, setCallbackEvents] = useState<any[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<any>(null);
+  const [eventLoading, setEventLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [page, setPage] = useState(1);
@@ -44,21 +49,35 @@ const Transactions = () => {
     return () => clearTimeout(debounce);
   }, [page, searchTerm]);
 
-  useEffect(() => {
-    const fetchCallbackEvents = async () => {
-      try {
-        const res = await apiFetch('/payments/callback-events?limit=5');
-        if (res.ok) {
-          const data = await res.json();
-          setCallbackEvents(data.events || []);
-        }
-      } catch (e) {
-        console.error('Error fetching callback events:', e);
+  const fetchCallbackEvents = async () => {
+    try {
+      const res = await apiFetch('/payments/callback-events?limit=10');
+      if (res.ok) {
+        const data = await res.json();
+        setCallbackEvents(data.events || []);
       }
-    };
+    } catch (e) {
+      console.error('Error fetching callback events:', e);
+    }
+  };
 
+  useEffect(() => {
     fetchCallbackEvents();
   }, []);
+
+  const openCallbackEvent = async (id: string) => {
+    setEventLoading(true);
+    try {
+      const res = await apiFetch(`/payments/callback-events/${id}`);
+      if (res.ok) {
+        setSelectedEvent(await res.json());
+      }
+    } catch (e) {
+      console.error('Error fetching callback event:', e);
+    } finally {
+      setEventLoading(false);
+    }
+  };
 
   const getStatusStyle = (status: string) => {
     switch (status) {
@@ -102,6 +121,13 @@ const Transactions = () => {
             </h2>
             <p className="text-sm text-slate-500">Use this to confirm whether Safaricom is reaching the app.</p>
           </div>
+          <button
+            onClick={fetchCallbackEvents}
+            className="p-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors"
+            title="Refresh callbacks"
+          >
+            <RefreshCw size={18} />
+          </button>
         </div>
         {callbackEvents.length === 0 ? (
           <div className="px-6 py-6 text-sm text-slate-400">
@@ -110,22 +136,117 @@ const Transactions = () => {
         ) : (
           <div className="divide-y divide-slate-100">
             {callbackEvents.map((event) => (
-              <div key={event.id} className="px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <button
+                key={event.id}
+                onClick={() => openCallbackEvent(event.id)}
+                className="w-full text-left px-6 py-4 flex flex-col md:flex-row md:items-center justify-between gap-3 hover:bg-slate-50 transition-colors"
+              >
                 <div>
                   <p className="font-semibold text-slate-800">{event.eventType}</p>
                   <p className="text-sm text-slate-500">
                     {event.transactionCode || 'No transaction code'} · {new Date(event.createdAt).toLocaleString('en-KE', { dateStyle: 'medium', timeStyle: 'short' })}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">
+                    {event.method || 'POST'} {event.path || ''} · {event.contentType || 'unknown content type'} · {event._count?.logs || 0} steps
                   </p>
                   {event.error && <p className="text-xs text-rose-600 mt-1">{event.error}</p>}
                 </div>
                 <span className={`w-fit text-xs font-bold px-3 py-1 rounded-full ${event.status === 'PROCESSED' ? 'bg-emerald-100 text-emerald-700' : event.status === 'FAILED' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'}`}>
                   {event.status}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         )}
       </div>
+
+      {(selectedEvent || eventLoading) && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h2 className="font-bold text-slate-900 flex items-center">
+                  <FileJson size={18} className="mr-2 text-blue-500" />
+                  Callback Activity
+                </h2>
+                <p className="text-sm text-slate-500">{selectedEvent?.eventType || 'Loading...'}</p>
+              </div>
+              <button onClick={() => setSelectedEvent(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-lg">
+                <X size={20} />
+              </button>
+            </div>
+
+            {eventLoading && !selectedEvent ? (
+              <div className="p-8 text-slate-400">Loading callback activity...</div>
+            ) : selectedEvent && (
+              <div className="overflow-y-auto p-6 space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {[
+                    ['Status', selectedEvent.status],
+                    ['Transaction', selectedEvent.transactionCode || 'None'],
+                    ['Content Type', selectedEvent.contentType || 'Unknown'],
+                    ['Payment ID', selectedEvent.paymentId || 'None'],
+                  ].map(([label, value]) => (
+                    <div key={label} className="bg-slate-50 border border-slate-100 rounded-xl p-4">
+                      <p className="text-[10px] uppercase tracking-wider font-bold text-slate-400 mb-1">{label}</p>
+                      <p className="text-sm font-semibold text-slate-800 break-all">{value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedEvent.error && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-700 rounded-xl p-4 text-sm">
+                    {selectedEvent.error}
+                  </div>
+                )}
+
+                <div>
+                  <h3 className="font-bold text-slate-900 mb-3">Processing Timeline</h3>
+                  <div className="space-y-3">
+                    {(selectedEvent.logs || []).length === 0 ? (
+                      <p className="text-sm text-slate-400">No activity steps recorded.</p>
+                    ) : selectedEvent.logs.map((log: any) => (
+                      <div key={log.id} className="border border-slate-100 rounded-xl p-4">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <p className="font-semibold text-slate-800">{log.stage}</p>
+                            <p className="text-sm text-slate-600">{log.message}</p>
+                          </div>
+                          <span className={`text-[10px] font-bold px-2 py-1 rounded-full ${log.level === 'ERROR' ? 'bg-rose-100 text-rose-700' : log.level === 'WARN' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                            {log.level}
+                          </span>
+                        </div>
+                        {log.details && (
+                          <pre className="mt-3 bg-slate-950 text-slate-100 rounded-xl p-3 text-xs overflow-x-auto">{JSON.stringify(log.details, null, 2)}</pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div>
+                    <h3 className="font-bold text-slate-900 mb-3">Payload</h3>
+                    <pre className="bg-slate-950 text-slate-100 rounded-xl p-4 text-xs overflow-x-auto max-h-80">{JSON.stringify(selectedEvent.payload, null, 2)}</pre>
+                  </div>
+                  <div className="space-y-6">
+                    <div>
+                      <h3 className="font-bold text-slate-900 mb-3">Headers</h3>
+                      <pre className="bg-slate-950 text-slate-100 rounded-xl p-4 text-xs overflow-x-auto max-h-48">{JSON.stringify(selectedEvent.headers, null, 2)}</pre>
+                    </div>
+                    {selectedEvent.rawBody && (
+                      <div>
+                        <h3 className="font-bold text-slate-900 mb-3">Raw Body</h3>
+                        <pre className="bg-slate-950 text-slate-100 rounded-xl p-4 text-xs overflow-x-auto max-h-48">{selectedEvent.rawBody}</pre>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">

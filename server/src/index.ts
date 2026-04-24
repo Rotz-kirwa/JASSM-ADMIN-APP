@@ -25,9 +25,14 @@ if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process
 app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.text({ type: ['text/*', 'application/xml', 'application/*+xml'] }));
+const captureRawBody = (req: express.Request, res: express.Response, buf: Buffer) => {
+  if (buf.length > 0) {
+    (req as any).rawBody = buf.toString('utf8');
+  }
+};
+app.use(express.json({ verify: captureRawBody }));
+app.use(express.urlencoded({ extended: true, verify: captureRawBody }));
+app.use(express.text({ type: ['text/*', 'application/xml', 'application/*+xml'], verify: captureRawBody }));
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -42,6 +47,7 @@ const requiredTables = [
   'Customer',
   'Payment',
   'PaymentCallbackEvent',
+  'PaymentActivityLog',
   'SMSTemplate',
   'SMSLog',
   'AuditLog',

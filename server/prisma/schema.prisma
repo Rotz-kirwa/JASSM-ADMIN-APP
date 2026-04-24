@@ -47,14 +47,41 @@ model PaymentCallbackEvent {
   eventType       String
   transactionCode String?
   status          String    @default("RECEIVED") // RECEIVED, PROCESSED, FAILED
+  method          String?
+  path            String?
+  contentType     String?
+  userAgent       String?
+  ip              String?
+  headers         Json?
+  query           Json?
+  rawBody         String?
   payload         Json
+  paymentId       String?
   error           String?
   processedAt     DateTime?
   createdAt       DateTime  @default(now())
+  logs            PaymentActivityLog[]
 
   @@index([eventType])
   @@index([transactionCode])
   @@index([status])
+  @@index([createdAt])
+}
+
+model PaymentActivityLog {
+  id              String                @id @default(uuid())
+  callbackEventId String?
+  callbackEvent   PaymentCallbackEvent? @relation(fields: [callbackEventId], references: [id], onDelete: Cascade)
+  level           String                @default("INFO") // INFO, WARN, ERROR
+  stage           String
+  message         String
+  details         Json?
+  createdAt       DateTime              @default(now())
+
+  @@index([callbackEventId])
+  @@index([level])
+  @@index([stage])
+  @@index([createdAt])
 }
 
 model Customer {

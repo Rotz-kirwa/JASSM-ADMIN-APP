@@ -22,6 +22,6 @@ router.post('/callback', handleCallback); // Public callback endpoint
 // C2B Endpoints
 router.post('/c2b/validation', handleC2BValidation);
 router.post('/c2b/confirmation', handleC2BConfirmation);
-router.post('/c2b/register', authenticate, registerC2B);
+router.post('/c2b/register', registerC2B);
 
 export default router;

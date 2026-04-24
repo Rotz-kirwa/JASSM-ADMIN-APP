@@ -94,17 +94,19 @@ class MpesaService {
 
   async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
     this.requireConfig({
-      MPESA_TILL_NUMBER: this.tillNumber,
+      MPESA_SHORTCODE: this.shortCode,
     });
 
     const accessToken = await this.getAccessToken();
+    const registerUrlPath = this.environment === 'production'
+      ? '/mpesa/c2b/v2/registerurl'
+      : '/mpesa/c2b/v1/registerurl';
 
     try {
-      // BUG FIX: Use tillNumber (895858) not shortCode (6270335) for Buy Goods C2B
       const response = await axios.post(
-        `${this.baseUrl}/mpesa/c2b/v1/registerurl`,
+        `${this.baseUrl}${registerUrlPath}`,
         {
-          ShortCode: this.tillNumber,   // BUG FIX: was this.shortCode
+          ShortCode: this.shortCode,
           ResponseType: 'Completed',
           ConfirmationURL: confirmationUrl,
           ValidationURL: validationUrl,

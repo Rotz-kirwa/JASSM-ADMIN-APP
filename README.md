@@ -41,6 +41,8 @@ Content-Type: application/json
 { "baseUrl": "https://your-api-domain.com" }
 ```
 
+For production Daraja apps with `C2B v2` enabled, the backend registers URLs through Safaricom's production C2B v2 endpoint using `MPESA_SHORTCODE`. STK Push still uses `MPESA_TILL_NUMBER` for Buy Goods.
+
 The server `start` script runs `prisma migrate deploy` before booting, so production tables are created/updated automatically from committed migrations. If your host uses a custom start command, make sure it runs:
 
 ```sh

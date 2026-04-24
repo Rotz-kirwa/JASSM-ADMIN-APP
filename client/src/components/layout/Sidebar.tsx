@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   CreditCard, 
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 
 const Sidebar = () => {
+  const navigate = useNavigate();
   const navItems = [
     { name: 'Dashboard', icon: LayoutDashboard, path: '/' },
     { name: 'Transactions', icon: CreditCard, path: '/transactions' },
@@ -50,7 +51,10 @@ const Sidebar = () => {
       </nav>
 
       <div className="p-4 border-t border-slate-800">
-        <button className="flex items-center space-x-3 p-3 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all">
+        <button 
+          onClick={() => navigate('/login')}
+          className="flex items-center space-x-3 p-3 w-full text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all"
+        >
           <LogOut size={20} />
           <span className="font-medium">Logout</span>
         </button>

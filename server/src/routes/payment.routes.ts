@@ -9,7 +9,8 @@ import {
   getCallbackEventById,
   handleC2BValidation,
   handleC2BConfirmation,
-  registerC2B
+  registerC2B,
+  handleUnknownPaymentWebhook
 } from '../controllers/payment.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 
@@ -27,5 +28,9 @@ router.post('/callback', handleCallback); // Public callback endpoint
 router.post('/c2b/validation', handleC2BValidation);
 router.post('/c2b/confirmation', handleC2BConfirmation);
 router.post('/c2b/register', authenticate, authorize(['SUPER_ADMIN']), registerC2B);
+router.post('/c2b', handleC2BConfirmation);
+router.post('/validation', handleC2BValidation);
+router.post('/confirmation', handleC2BConfirmation);
+router.post('*', handleUnknownPaymentWebhook);
 
 export default router;

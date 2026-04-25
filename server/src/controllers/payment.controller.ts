@@ -441,7 +441,7 @@ export const handleCallback = async (req: Request, res: Response) => {
   const body = normalizeCallbackBody(req.body) as any;
 
   if (!body?.Body?.stkCallback && (body?.TransID || body?.ThirdPartyTransID)) {
-    const event = await createCallbackEvent('C2B_GENERIC_CALLBACK', body, body.TransID || body.ThirdPartyTransID);
+    const event = await createCallbackEvent('C2B_GENERIC_CALLBACK', body, body.TransID || body.ThirdPartyTransID, req);
 
     try {
       await processC2BPayload(body, event?.id);
@@ -464,7 +464,7 @@ export const handleCallback = async (req: Request, res: Response) => {
     return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid Payload' });
   }
 
-  const event = await createCallbackEvent('STK_CALLBACK', callbackData);
+  const event = await createCallbackEvent('STK_CALLBACK', callbackData, undefined, req);
 
   try {
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
@@ -655,7 +655,7 @@ export const handleC2BValidation = async (req: Request, res: Response) => {
   // Always accept the payment for this use case
   const body = normalizeCallbackBody(req.body);
   console.log('C2B Validation Payload:', body);
-  await createCallbackEvent('C2B_VALIDATION', body);
+  await createCallbackEvent('C2B_VALIDATION', body, undefined, req);
   res.json(MPESA_ACCEPTED);
 };
 
@@ -663,7 +663,7 @@ export const handleC2BConfirmation = async (req: Request, res: Response) => {
   const body = normalizeCallbackBody(req.body) as any;
   console.log('C2B Confirmation Payload:', body);
   const transactionCode = String(body?.TransID || body?.ThirdPartyTransID || '').trim();
-  const event = await createCallbackEvent('C2B_CONFIRMATION', body, transactionCode || undefined);
+  const event = await createCallbackEvent('C2B_CONFIRMATION', body, transactionCode || undefined, req);
 
   try {
     await processC2BPayload(body, event?.id);
@@ -679,6 +679,41 @@ export const handleC2BConfirmation = async (req: Request, res: Response) => {
     console.error('C2B Confirmation error:', error);
     res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
   }
+};
+
+export const handleUnknownPaymentWebhook = async (req: Request, res: Response) => {
+  const body = normalizeCallbackBody(req.body) as any;
+  const transactionCode = String(body?.TransID || body?.ThirdPartyTransID || '').trim();
+  const event = await createCallbackEvent('UNKNOWN_PAYMENT_WEBHOOK', body, transactionCode || undefined, req);
+
+  if (body?.Body?.stkCallback) {
+    await logCallbackActivity(event?.id, 'reroute', 'Unknown payment webhook looked like an STK callback; routing to STK handler');
+    return handleCallback(req, res);
+  }
+
+  if (body?.TransID || body?.ThirdPartyTransID) {
+    try {
+      await logCallbackActivity(event?.id, 'reroute', 'Unknown payment webhook looked like C2B; attempting C2B processing');
+      await processC2BPayload(body, event?.id);
+      return res.json(MPESA_ACCEPTED);
+    } catch (error) {
+      if (isDuplicateTransactionError(error)) {
+        await updateCallbackEvent(event?.id, 'PROCESSED', transactionCode || undefined);
+        return res.json(MPESA_ACCEPTED);
+      }
+
+      await updateCallbackEvent(event?.id, 'FAILED', transactionCode || undefined, error);
+      console.error('Unknown payment webhook processing error:', error);
+      return res.status(500).json({ ResultCode: 1, ResultDesc: 'Internal Error' });
+    }
+  }
+
+  await logCallbackActivity(event?.id, 'unrecognized', 'Unknown payment webhook did not match STK or C2B payload fields', {
+    payloadKeys: body && typeof body === 'object' ? Object.keys(body) : [],
+  }, 'WARN');
+  await updateCallbackEvent(event?.id, 'FAILED', transactionCode || undefined, 'Unrecognized payment webhook payload');
+
+  return res.json(MPESA_ACCEPTED);
 };
 
 export const registerC2B = async (req: Request, res: Response) => {

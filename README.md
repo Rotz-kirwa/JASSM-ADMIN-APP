@@ -16,6 +16,7 @@ Set these server environment variables before deploying:
 - `MPESA_CONSUMER_SECRET`
 - `MPESA_SHORTCODE`
 - `MPESA_TILL_NUMBER`
+- `MPESA_C2B_SHORTCODE`, usually the live Till number for Buy Goods manual payments
 - `MPESA_PASSKEY`
 - `MPESA_CALLBACK_URL`, for STK push callbacks
 - `SMS_API_KEY`, `SMS_USERNAME`, and optional `SMS_SENDER_ID`
@@ -41,7 +42,7 @@ Content-Type: application/json
 { "baseUrl": "https://your-api-domain.com" }
 ```
 
-For production Daraja apps with `C2B v2` enabled, the backend registers URLs through Safaricom's production C2B v2 endpoint using `MPESA_SHORTCODE`. STK Push still uses `MPESA_TILL_NUMBER` for Buy Goods.
+For production Daraja apps with `C2B v2` enabled, the backend registers URLs through Safaricom's production C2B v2 endpoint using `MPESA_C2B_SHORTCODE`. For Buy Goods manual payments this should usually be the Till number customers pay. STK Push also uses `MPESA_TILL_NUMBER`.
 
 The server `start` script runs `prisma migrate deploy` before booting, so production tables are created/updated automatically from committed migrations. If your host uses a custom start command, make sure it runs:
 

@@ -8,6 +8,7 @@ class MpesaService {
   private consumerSecret = process.env.MPESA_CONSUMER_SECRET;
   private shortCode = process.env.MPESA_SHORTCODE;      // Paybill/Head Office: 6270335
   private tillNumber = process.env.MPESA_TILL_NUMBER || process.env.MPESA_SHORTCODE; // Till: 895858
+  private c2bShortCode = process.env.MPESA_C2B_SHORTCODE || process.env.MPESA_TILL_NUMBER || process.env.MPESA_SHORTCODE;
   private passkey = process.env.MPESA_PASSKEY;
   private environment = process.env.MPESA_ENVIRONMENT || 'sandbox';
   private callbackUrl = process.env.MPESA_CALLBACK_URL;
@@ -94,7 +95,7 @@ class MpesaService {
 
   async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
     this.requireConfig({
-      MPESA_SHORTCODE: this.shortCode,
+      MPESA_C2B_SHORTCODE: this.c2bShortCode,
     });
 
     const accessToken = await this.getAccessToken();
@@ -106,7 +107,7 @@ class MpesaService {
       const response = await axios.post(
         `${this.baseUrl}${registerUrlPath}`,
         {
-          ShortCode: this.shortCode,
+          ShortCode: this.c2bShortCode,
           ResponseType: 'Completed',
           ConfirmationURL: confirmationUrl,
           ValidationURL: validationUrl,

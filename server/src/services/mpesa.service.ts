@@ -29,6 +29,14 @@ class MpesaService {
     }
   }
 
+  private getProviderError(error: any) {
+    return error.response?.data?.errorMessage
+      || error.response?.data?.error
+      || error.response?.data?.message
+      || error.response?.data
+      || error.message;
+  }
+
   async getAccessToken() {
     this.requireConfig({
       MPESA_CONSUMER_KEY: this.consumerKey,
@@ -93,31 +101,74 @@ class MpesaService {
     }
   }
 
+  private async registerC2BUrlsForShortCode(
+    accessToken: string,
+    shortCode: string,
+    validationUrl: string,
+    confirmationUrl: string
+  ) {
+    const registerUrlPath = this.environment === 'production'
+      ? '/mpesa/c2b/v2/registerurl'
+      : '/mpesa/c2b/v1/registerurl';
+
+    const response = await axios.post(
+      `${this.baseUrl}${registerUrlPath}`,
+      {
+        ShortCode: shortCode,
+        ResponseType: 'Completed',
+        ConfirmationURL: confirmationUrl,
+        ValidationURL: validationUrl,
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    return response.data;
+  }
+
   async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
     this.requireConfig({
       MPESA_C2B_SHORTCODE: this.c2bShortCode,
     });
 
     const accessToken = await this.getAccessToken();
-    const registerUrlPath = this.environment === 'production'
-      ? '/mpesa/c2b/v2/registerurl'
-      : '/mpesa/c2b/v1/registerurl';
 
     try {
-      const response = await axios.post(
-        `${this.baseUrl}${registerUrlPath}`,
-        {
-          ShortCode: this.c2bShortCode,
-          ResponseType: 'Completed',
-          ConfirmationURL: confirmationUrl,
-          ValidationURL: validationUrl,
-        },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
+      return await this.registerC2BUrlsForShortCode(
+        accessToken,
+        this.c2bShortCode as string,
+        validationUrl,
+        confirmationUrl
       );
-      return response.data;
     } catch (error: any) {
+      const providerError = this.getProviderError(error);
       console.error('Error registering C2B URLs:', error.response?.data || error.message);
-      throw new Error('Failed to register C2B URLs');
+
+      const canRetryWithMainShortCode = !process.env.MPESA_C2B_SHORTCODE
+        && this.shortCode
+        && this.shortCode !== this.c2bShortCode
+        && String(providerError).toLowerCase().includes('own shortcode');
+
+      if (canRetryWithMainShortCode) {
+        try {
+          const result = await this.registerC2BUrlsForShortCode(
+            accessToken,
+            this.shortCode as string,
+            validationUrl,
+            confirmationUrl
+          );
+
+          return {
+            ...result,
+            registeredShortCode: this.shortCode,
+            note: 'Retried with MPESA_SHORTCODE because Safaricom rejected the Till number for this Daraja app.',
+          };
+        } catch (retryError: any) {
+          const retryProviderError = this.getProviderError(retryError);
+          console.error('Error registering C2B URLs with MPESA_SHORTCODE:', retryError.response?.data || retryError.message);
+          throw new Error(`Failed to register C2B URLs: ${retryProviderError}`);
+        }
+      }
+
+      throw new Error(`Failed to register C2B URLs: ${providerError}`);
     }
   }
 }

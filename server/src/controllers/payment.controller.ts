@@ -753,7 +753,10 @@ export const registerC2B = async (req: Request, res: Response) => {
     const confirmationUrl = `${baseUrl}/api/payments/c2b/confirmation`;
 
     const result = await mpesaService.registerC2BUrls(validationUrl, confirmationUrl);
-    res.json({ message: 'C2B URLs registered successfully', result });
+    const message = (result as any).alreadyRegistered
+      ? 'C2B URLs are already registered with Safaricom — callbacks are active'
+      : 'C2B URLs registered successfully';
+    res.json({ message, result });
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }

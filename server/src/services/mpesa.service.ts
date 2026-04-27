@@ -146,6 +146,20 @@ class MpesaService {
       const providerError = this.getProviderError(error);
       console.error('Error registering C2B URLs:', error.response?.data || error.message);
 
+      // Safaricom returns errorCode 500.003.1001 when the URLs are already registered.
+      // This is not a failure — it confirms the callbacks are active.
+      const isAlreadyRegistered =
+        error?.response?.data?.errorCode === '500.003.1001' ||
+        String(providerError).toLowerCase().includes('already registered');
+
+      if (isAlreadyRegistered) {
+        return {
+          ResponseCode: '0',
+          ResponseDescription: 'C2B URLs are already registered with Safaricom — callbacks are active',
+          alreadyRegistered: true,
+        };
+      }
+
       const canRetryWithMainShortCode = !process.env.MPESA_C2B_SHORTCODE
         && this.shortCode
         && this.shortCode !== this.c2bShortCode

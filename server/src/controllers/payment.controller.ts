@@ -271,7 +271,11 @@ const processC2BPayload = async (payload: any, eventId?: string) => {
     ThirdPartyTransID,
   } = payload;
 
-  const transactionCode = String(TransID || ThirdPartyTransID || '').trim();
+  const rawTransID = String(TransID || '').trim();
+  // ThirdPartyTransID is '0' for standard Buy Goods — never use it as a primary key
+  const rawThirdParty = String(ThirdPartyTransID || '').trim();
+  const thirdPartyCode = rawThirdParty && /^[^0]\d*$|^[A-Za-z]/.test(rawThirdParty) ? rawThirdParty : '';
+  const transactionCode = rawTransID || thirdPartyCode;
   const amount = Number(TransAmount);
   const phoneNumber = normalizePhoneNumber(MSISDN || PhoneNumber);
 
@@ -514,21 +518,37 @@ export const handleCallback = async (req: Request, res: Response) => {
   }
 };
 
-export const getSummary = async (req: Request, res: Response) => {
+// Returns midnight EAT (UTC+3) as a UTC Date so Prisma comparisons align with Kenya calendar days.
+const eatMidnight = (utcDate: Date): Date => {
+  const EAT_MS = 3 * 60 * 60 * 1000;
+  const eatDate = new Date(utcDate.getTime() + EAT_MS);
+  return new Date(
+    Date.UTC(eatDate.getUTCFullYear(), eatDate.getUTCMonth(), eatDate.getUTCDate()) - EAT_MS
+  );
+};
+
+export const getSummary = async (_req: Request, res: Response) => {
   try {
     const now = new Date();
-    
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    const yesterdayStart = new Date(todayStart);
-    yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-    
-    const thisWeekStart = new Date(todayStart);
-    thisWeekStart.setDate(todayStart.getDate() - todayStart.getDay());
-    
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    
-    const thisYearStart = new Date(now.getFullYear(), 0, 1);
+
+    const todayStart = eatMidnight(now);
+
+    const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+
+    const thisWeekStart = (() => {
+      const eat = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+      return new Date(todayStart.getTime() - eat.getUTCDay() * 24 * 60 * 60 * 1000);
+    })();
+
+    const thisMonthStart = (() => {
+      const eat = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+      return new Date(Date.UTC(eat.getUTCFullYear(), eat.getUTCMonth(), 1) - 3 * 60 * 60 * 1000);
+    })();
+
+    const thisYearStart = (() => {
+      const eat = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+      return new Date(Date.UTC(eat.getUTCFullYear(), 0, 1) - 3 * 60 * 60 * 1000);
+    })();
 
     const [today, yesterday, thisWeek, thisMonth, thisYear] = await Promise.all([
       prisma.payment.aggregate({
@@ -571,28 +591,36 @@ export const getSummary = async (req: Request, res: Response) => {
 };
 
 export const getReports = async (req: Request, res: Response) => {
-  const { range = 'last7days' } = req.query; 
+  const { range = 'last7days' } = req.query;
   const now = new Date();
-  
-  let startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  let endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  const todayEat = eatMidnight(now);
+  const tomorrowEat = new Date(todayEat.getTime() + DAY_MS);
+
+  let startDate = todayEat;
+  let endDate = tomorrowEat;
 
   if (range === 'today') {
     // defaults are fine
   } else if (range === 'yesterday') {
-    startDate.setDate(startDate.getDate() - 1);
-    endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + 1);
+    startDate = new Date(todayEat.getTime() - DAY_MS);
+    endDate = todayEat;
   } else if (range === 'last7days') {
-    startDate.setDate(startDate.getDate() - 6);
-    endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    startDate = new Date(todayEat.getTime() - 6 * DAY_MS);
+    endDate = tomorrowEat;
   } else if (range === 'thismonth') {
-    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
-    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const eatNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    startDate = new Date(Date.UTC(eatNow.getUTCFullYear(), eatNow.getUTCMonth(), 1) - 3 * 60 * 60 * 1000);
+    endDate = new Date(Date.UTC(eatNow.getUTCFullYear(), eatNow.getUTCMonth() + 1, 1) - 3 * 60 * 60 * 1000);
   } else if (range === 'thisyear') {
-    startDate = new Date(now.getFullYear(), 0, 1);
-    endDate = new Date(now.getFullYear() + 1, 0, 1);
+    const eatNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    startDate = new Date(Date.UTC(eatNow.getUTCFullYear(), 0, 1) - 3 * 60 * 60 * 1000);
+    endDate = new Date(Date.UTC(eatNow.getUTCFullYear() + 1, 0, 1) - 3 * 60 * 60 * 1000);
   }
+
+  // Shift a UTC Date into EAT so UTC getters return EAT values.
+  const toEat = (d: Date) => new Date(d.getTime() + 3 * 60 * 60 * 1000);
 
   try {
     const payments = await prisma.payment.findMany({
@@ -606,38 +634,38 @@ export const getReports = async (req: Request, res: Response) => {
 
     const formatData = () => {
       const result: Record<string, number> = {};
-      
+
       if (range === 'today' || range === 'yesterday') {
-        for(let i=0; i<24; i++) {
+        for (let i = 0; i < 24; i++) {
           result[`${i}:00`] = 0;
         }
         payments.forEach(p => {
-          const hour = p.paidAt.getHours();
+          const hour = toEat(p.paidAt).getUTCHours();
           result[`${hour}:00`] += p.amount;
         });
       } else if (range === 'last7days') {
         const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-        for(let i=6; i>=0; i--) {
-          const d = new Date(endDate);
-          d.setDate(d.getDate() - 1 - i);
-          result[days[d.getDay()]] = 0;
+        for (let i = 6; i >= 0; i--) {
+          const d = toEat(new Date(endDate.getTime() - (i + 1) * DAY_MS));
+          result[days[d.getUTCDay()]] = 0;
         }
         payments.forEach(p => {
-          result[days[p.paidAt.getDay()]] += p.amount;
+          result[days[toEat(p.paidAt).getUTCDay()]] += p.amount;
         });
       } else if (range === 'thismonth') {
-        const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-        for(let i=1; i<=daysInMonth; i++) {
+        const eatNow = toEat(now);
+        const daysInMonth = new Date(Date.UTC(eatNow.getUTCFullYear(), eatNow.getUTCMonth() + 1, 0)).getUTCDate();
+        for (let i = 1; i <= daysInMonth; i++) {
           result[`${i}`] = 0;
         }
         payments.forEach(p => {
-          result[`${p.paidAt.getDate()}`] += p.amount;
+          result[`${toEat(p.paidAt).getUTCDate()}`] += p.amount;
         });
       } else if (range === 'thisyear') {
         const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
         months.forEach(m => result[m] = 0);
         payments.forEach(p => {
-          result[months[p.paidAt.getMonth()]] += p.amount;
+          result[months[toEat(p.paidAt).getUTCMonth()]] += p.amount;
         });
       }
 

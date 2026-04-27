@@ -125,8 +125,12 @@ class MpesaService {
   }
 
   async registerC2BUrls(validationUrl: string, confirmationUrl: string) {
+    if (!this.c2bShortCode) {
+      throw new Error('Missing M-Pesa configuration: MPESA_C2B_SHORTCODE (or MPESA_TILL_NUMBER as fallback) must be set');
+    }
     this.requireConfig({
-      MPESA_C2B_SHORTCODE: this.c2bShortCode,
+      MPESA_CONSUMER_KEY: this.consumerKey,
+      MPESA_CONSUMER_SECRET: this.consumerSecret,
     });
 
     const accessToken = await this.getAccessToken();
